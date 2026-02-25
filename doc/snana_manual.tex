@@ -1203,6 +1203,8 @@ Next is a global header with the following keys:
   SKYSIG_UNIT: ADU_PER_SQARCSEC # change SKYSIG unit from default per-pixel
   PSF_UNIT:    ARCSEC_FWHM      # change PSF unit from default pixels
   PSF_UNIT:    NEA_PIXEL        # give Noise-Equiv-Area instead of PSF1,PSF2,PSFRATIO
+  PSF_MODEL:   MOFFAT           # optional PSF model (default: GAUSS)
+  MOFFAT_BETA: <VAL>            # wing parameter; required for PSF_MODEL: MOFFAT
   NPE_PIXEL_SATURATE: <VAL>     # pixel-flux Saturation, photo-electrons
   PHOTFLAG_SATURATE:  <MASK>    # saturation mask in output PHOTFLAG column
   NLIBID:             <VAL>     # Number of obs-sequences (LIBIDs) in file
@@ -1298,13 +1300,23 @@ along with references to terms in Eq.~\ref{eq:noiseModel},
 	The simulated README file includes the {\tt PSF\_UNIT} value.
 	These PSF values are used to determine a noise-equivalent
 	area ($A$ in Eq.~\ref{eq:noiseModel} and Eq.~\ref{eq:NEA_formula}). 
-	If you have computed $A$ from the measured PSF, 
-	then you can simply define 
-	${\rm PSF1} = \sqrt{A/4\pi}$ and set {\bf PSF2}={\bf RATIO}=0.
+		If you have computed $A$ from the measured PSF, 
+		then you can simply define 
+		${\rm PSF1} = \sqrt{A/4\pi}$ and set {\bf PSF2}={\bf RATIO}=0.
+	Alternatively, to simulate more realistic PSF wings, a normalized
+	Moffat profile can be enabled with global-header keys
+	{\tt PSF\_MODEL: MOFFAT} and {\tt MOFFAT\_BETA: <VAL>}.
+	For {\tt PSF\_UNIT: ARCSEC\_FWHM}, {\bf PSF1} is interpreted as the
+	Moffat FWHM (and {\bf PSF2},{\bf RATIO} should be zero/ignored).
+	For {\tt PSF\_UNIT: NEA\_PIXEL} (or {\tt NEA\_ARCSECSQ}), the NEA value
+	is interpreted as the Moffat NEA and SNANA computes the corresponding
+	FWHM from ({\tt NEA},{\tt MOFFAT\_BETA}).
 %
   \item {\bf NEA:} Rather than providing 3 PSF parameters, the noise-equiv-area
        (NEA) can be provided using header key {\tt PSF\_UNIT: NEA\_PIXEL}
        (see Fig.~\ref{fig:simlib_nea}).
+       If {\tt PSF\_MODEL: MOFFAT} is enabled, the NEA values are interpreted
+       as Moffat NEA (rather than Gaussian NEA).
 %
   \item {\bf ZPTAVG:} Zero point relating the source magnitude ($m$) 
     to the CCD flux measured in ADU: 
@@ -1660,6 +1672,14 @@ $$
 %
 where $P$ is the pixel size and $\sigma$ refers to the PSF.
 Beware that when $P > \sigma$, the analytic approximation degrades.
+If {\tt PSF\_MODEL: MOFFAT} is enabled, SNANA uses an equal-area
+circle approximation for the central pixel and the enclosed-energy
+fraction for a normalized Moffat profile:
+$$
+ \fA \approx 1 - \left[1 + \left(\frac{r_{\rm eff}}{\alpha}\right)^2 \right]^{1-\beta},
+ \quad r_{\rm eff} \equiv \frac{P}{\sqrt{\pi}},
+$$
+where $\beta$ is {\tt MOFFAT\_BETA} and $\alpha$ is the Moffat scale radius.
 However, the computation of $\fA$ only affects the saturation flag,
 and is not used in determining the broadband fluxes.
 
@@ -15236,4 +15256,3 @@ the problem, we will not be able to provide assistance.
 % *******************************************************************
     \end{document}
 % *******************************************************************
-

@@ -1559,13 +1559,15 @@ struct SIMLIB_GLOBAL_HEADER {
   // count-rate non-linearity
   int    NFIELD_TEXPOSE;
   char   FIELD_TEXPOSE[MXFIELD_OVP][MXCHAR_FIELDNAME];
-  double TEXPOSE_LIST[MXFIELD_OVP][MXFILTINDX];
-  
-  char PSF_UNIT[40] ;
-  bool NEA_PSF_UNIT;
-  char SKYSIG_UNIT[40];
-  char USERNAME[40];
-  int  NLIBID, NLIBID_VALID ;
+	  double TEXPOSE_LIST[MXFIELD_OVP][MXFILTINDX];
+	  
+	  char PSF_UNIT[40] ;
+	  char PSF_MODEL[20];     // GAUSS (default) or MOFFAT
+	  bool NEA_PSF_UNIT;
+	  double MOFFAT_BETA;     // wing parameter (required if PSF_MODEL=MOFFAT)
+	  char SKYSIG_UNIT[40];
+	  char USERNAME[40];
+	  int  NLIBID, NLIBID_VALID ;
   double PIXSIZE, SOLID_ANGLE ;
   int  NPE_PIXEL_SATURATE;    // Jan 3, 2018
   int  PHOTFLAG_SATURATE ;

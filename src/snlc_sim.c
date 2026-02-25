@@ -17996,7 +17996,9 @@ void SIMLIB_initGlobalHeader(void) {
 	  SIMLIB_SKYSIG_SQPIX );
   sprintf(SIMLIB_GLOBAL_HEADER.PSF_UNIT,    "%s", 
 	  SIMLIB_PSF_PIXEL_SIGMA );  // default
+  sprintf(SIMLIB_GLOBAL_HEADER.PSF_MODEL,   "%s", "GAUSS"); // default
   SIMLIB_GLOBAL_HEADER.NEA_PSF_UNIT = false;
+  SIMLIB_GLOBAL_HEADER.MOFFAT_BETA  = 0.0;
 
   SIMLIB_FLUXERR_COR.USE     = 0 ;
   SIMLIB_TEMPLATE.USEFLAG    = 0 ;
@@ -18113,6 +18115,12 @@ void SIMLIB_readGlobalHeader_TEXT(void) {
     }
     else if ( strcmp(c_get,"PSF_UNIT:") == 0 ) {
       readchar(fp_SIMLIB, SIMLIB_GLOBAL_HEADER.PSF_UNIT );
+    }
+    else if ( strcmp(c_get,"PSF_MODEL:") == 0 ) {
+      readchar(fp_SIMLIB, SIMLIB_GLOBAL_HEADER.PSF_MODEL );
+    }
+    else if ( strcmp(c_get,"MOFFAT_BETA:") == 0 ) {
+      readdouble(fp_SIMLIB, 1, &SIMLIB_GLOBAL_HEADER.MOFFAT_BETA );
     }
     else if ( strcmp(c_get,"SKYSIG_UNIT:") == 0 ) {
       readchar(fp_SIMLIB, SIMLIB_GLOBAL_HEADER.SKYSIG_UNIT );
@@ -18303,6 +18311,34 @@ void SIMLIB_prepGlobalHeader(void) {
     errmsg(SEV_FATAL, 0, fnam, c1err, c2err); 
   }
 
+  // optional PSF model (default is GAUSS)
+  char *PSF_MODEL = SIMLIB_GLOBAL_HEADER.PSF_MODEL;
+  for (i = 0; PSF_MODEL[i] != 0; i++) {
+    PSF_MODEL[i] = toupper((unsigned char)PSF_MODEL[i]);
+  }
+  if ( strcmp(PSF_MODEL,"GAUSS") == 0 ) {
+    // legacy/default behavior
+  }
+  else if ( strcmp(PSF_MODEL,"MOFFAT") == 0 ) {
+    double beta = SIMLIB_GLOBAL_HEADER.MOFFAT_BETA;
+    if ( beta <= 1.0 ) {
+      sprintf(c1err,"Invalid 'MOFFAT_BETA: %.4f' in SIMLIB header", beta);
+      sprintf(c2err,"Require MOFFAT_BETA > 1.0 for PSF_MODEL: MOFFAT");
+      errmsg(SEV_FATAL, 0, fnam, c1err, c2err);
+    }
+    if ( !(SIMLIB_GLOBAL_HEADER.NEA_PSF_UNIT ||
+	   strcmp(unit,SIMLIB_PSF_ARCSEC_FWHM) == 0) ) {
+      sprintf(c1err,"Invalid PSF_UNIT '%s' for PSF_MODEL: MOFFAT", unit);
+      sprintf(c2err,"Use PSF_UNIT: NEA_PIXEL, NEA_ARCSECSQ, or ARCSEC_FWHM");
+      errmsg(SEV_FATAL, 0, fnam, c1err, c2err);
+    }
+  }
+  else {
+    sprintf(c1err,"Invalid 'PSF_MODEL: %s' in SIMLIB header", PSF_MODEL);
+    sprintf(c2err,"Valid values: GAUSS or MOFFAT");
+    errmsg(SEV_FATAL, 0, fnam, c1err, c2err);
+  }
+
   unit = SIMLIB_GLOBAL_HEADER.SKYSIG_UNIT ;
   if ( strcmp(unit,SIMLIB_SKYSIG_SQPIX) == 0 ) {  }
   else if ( strcmp(unit,SIMLIB_SKYSIG_SQASEC ) == 0 ) {  }
@@ -18312,6 +18348,10 @@ void SIMLIB_prepGlobalHeader(void) {
     errmsg(SEV_FATAL, 0, fnam, c1err, c2err); 
   }
   printf("\t SIMLIB PSF unit:    %s \n", SIMLIB_GLOBAL_HEADER.PSF_UNIT );
+  printf("\t SIMLIB PSF model:   %s \n", SIMLIB_GLOBAL_HEADER.PSF_MODEL );
+  if ( strcmp(SIMLIB_GLOBAL_HEADER.PSF_MODEL,"MOFFAT") == 0 ) {
+    printf("\t SIMLIB MOFFAT_BETA: %.4f \n", SIMLIB_GLOBAL_HEADER.MOFFAT_BETA );
+  }
   printf("\t SIMLIB SKYSIG unit: %s \n", SIMLIB_GLOBAL_HEADER.SKYSIG_UNIT );
   fflush(stdout);
 
@@ -20037,6 +20077,73 @@ void  SIMLIB_TAKE_SPECTRUM(void) {
 } // end  SIMLIB_TAKE_SPECTRUM
 
 
+// =========================================================
+// Moffat helpers (normalized circular Moffat)
+//   P(r) = (beta-1)/(pi*alpha^2) * [1 + (r/alpha)^2]^(-beta)
+//   NEA  = 1 / ∫ P^2 dA = pi*alpha^2 * (2*beta-1)/(beta-1)^2
+//   FWHM = 2*alpha*sqrt(2^(1/beta) - 1)
+static double moffat_alpha_from_nea(double nea, double beta) {
+  const double PI = 3.141592653589793;
+  double num = nea * (beta - 1.0) * (beta - 1.0);
+  double den = PI * (2.0 * beta - 1.0);
+  if ( den <= 0.0 || num <= 0.0 ) { return -9.0; }
+  return sqrt(num / den);
+}
+
+static double moffat_alpha_from_fwhm(double fwhm, double beta) {
+  double arg = pow(2.0, 1.0 / beta) - 1.0;
+  if ( arg <= 0.0 || fwhm <= 0.0 ) { return -9.0; }
+  return 0.5 * fwhm / sqrt(arg);
+}
+
+static double moffat_nea_from_alpha(double alpha, double beta) {
+  const double PI = 3.141592653589793;
+  double num = PI * alpha * alpha * (2.0 * beta - 1.0);
+  double den = (beta - 1.0) * (beta - 1.0);
+  if ( den <= 0.0 || num <= 0.0 ) { return -9.0; }
+  return num / den;
+}
+
+static double moffat_fwhm_from_alpha(double alpha, double beta) {
+  double arg = pow(2.0, 1.0 / beta) - 1.0;
+  if ( arg <= 0.0 || alpha <= 0.0 ) { return -9.0; }
+  return 2.0 * alpha * sqrt(arg);
+}
+
+// fraction of PSF flux in the central pixel (per exposure), used for saturation
+static double psf_central_pixel_frac(int epoch) {
+
+  double psfsig1 = SIMLIB_OBS_GEN.PSFSIG1[epoch] ; // pixels
+  double nea     = SIMLIB_OBS_GEN.NEA[epoch] ;     // pixels
+  double PIX     = SIMLIB_OBS_GEN.PIXSIZE[epoch] ; // arcsec
+  double PI      = 3.1415926535 ;
+
+  double AREAPIX, SQPSFSIG, areaCor, areaFrac;
+
+  AREAPIX  = PIX * PIX;
+
+  if ( strcmp(SIMLIB_GLOBAL_HEADER.PSF_MODEL,"MOFFAT") == 0 ) {
+    // equal-area circle approximation for the central pixel
+    double beta = SIMLIB_GLOBAL_HEADER.MOFFAT_BETA;
+    double alpha_pix = moffat_alpha_from_nea(nea, beta);
+    double alpha = alpha_pix * PIX; // arcsec
+    double r_eff = PIX / sqrt(PI);  // arcsec (area: pi*r_eff^2 = PIX^2)
+    double arg = 1.0 + (r_eff * r_eff) / (alpha * alpha);
+    areaFrac = 1.0 - pow(arg, 1.0 - beta);
+  }
+  else {
+    // Gaussian Taylor approximation (legacy)
+    SQPSFSIG = psfsig1*psfsig1 * AREAPIX ; // arcsec^2
+    areaCor  = AREAPIX/(4.0*PI*SQPSFSIG);  // from Taylor expansion
+    areaFrac = ( AREAPIX/(2.0*PI*SQPSFSIG) ) * ( 1.0 - areaCor );
+  }
+
+  if ( areaFrac < 0.0 ) { areaFrac = 0.0; }
+  if ( areaFrac > 1.0 ) { areaFrac = 1.0; }
+
+  return areaFrac;
+}
+
 // ===================================
 void  SIMLIB_prepCadence(int REPEAT_CADENCE) {
 
@@ -20068,6 +20175,8 @@ void  SIMLIB_prepCadence(int REPEAT_CADENCE) {
   double RAD = RADIAN;
   double PIXSIZE, FUDGE_ZPTERR, NEA, PSF[3], PSF_FWHM, TREST ;
   double z1       = 1.0 + GENLC.REDSHIFT_CMB ;
+  bool PSF_IS_MOFFAT = (strcmp(SIMLIB_GLOBAL_HEADER.PSF_MODEL,"MOFFAT") == 0);
+  double MOFFAT_BETA = SIMLIB_GLOBAL_HEADER.MOFFAT_BETA;
   bool IS_SPECTRO, BAD_MJD;
   char *UNIT, *BAND, *SUBSURVEY ;  
   char fnam[] = "SIMLIB_prepCadence" ;
@@ -20158,13 +20267,32 @@ void  SIMLIB_prepCadence(int REPEAT_CADENCE) {
 	// convert FWHM(arcsec) back to Sigma(pixels)
 	SIMLIB_OBS_RAW.PSFSIG1[ISTORE] /= (PIXSIZE * FWHM_SIGMA_RATIO);
 	SIMLIB_OBS_RAW.PSFSIG2[ISTORE] /= (PIXSIZE * FWHM_SIGMA_RATIO);
+	if ( PSF_IS_MOFFAT ) {
+	  // Moffat mode uses a single PSF described by (FWHM,beta) or (NEA,beta)
+	  // so ignore any 2nd Gaussian component in the SIMLIB.
+	  SIMLIB_OBS_RAW.PSFSIG2[ISTORE]  = 0.0;
+	  SIMLIB_OBS_RAW.PSFRATIO[ISTORE] = 0.0;
+	}
       }
       else if ( SIMLIB_GLOBAL_HEADER.NEA_PSF_UNIT ) {
-	// convert NEA back to Sigma(pixels)
+	// convert NEA to pixels (if needed) and then to a Gaussian-equivalent Sigma(pixels)
 	NEA = SIMLIB_OBS_RAW.NEA[ISTORE];
 	if ( strcmp(UNIT,SIMLIB_PSF_NEA_ARCSECSQ ) == 0 )
 	  { NEA /= (PIXSIZE * PIXSIZE);  SIMLIB_OBS_RAW.NEA[ISTORE]=NEA; } 
-	SIMLIB_OBS_RAW.PSFSIG1[ISTORE]  = sqrt(NEA/(2.0*TWOPI)) ;
+	if ( PSF_IS_MOFFAT ) {
+	  double alpha = moffat_alpha_from_nea(NEA, MOFFAT_BETA);
+	  double fwhm_pix = moffat_fwhm_from_alpha(alpha, MOFFAT_BETA);
+	  if ( alpha <= 0.0 || fwhm_pix <= 0.0 ) {
+	    sprintf(c1err,"Invalid Moffat alpha/FWHM computed from NEA=%.3f, beta=%.3f",
+		    NEA, MOFFAT_BETA);
+	    sprintf(c2err,"Check SIMLIB PSF_UNIT: %s and MOFFAT_BETA", UNIT);
+	    errmsg(SEV_FATAL, 0, fnam, c1err, c2err);
+	  }
+	  SIMLIB_OBS_RAW.PSFSIG1[ISTORE] = fwhm_pix / FWHM_SIGMA_RATIO;
+	}
+	else {
+	  SIMLIB_OBS_RAW.PSFSIG1[ISTORE]  = sqrt(NEA/(2.0*TWOPI)) ;
+	}
 	SIMLIB_OBS_RAW.PSFSIG2[ISTORE]  = 0.0;
 	SIMLIB_OBS_RAW.PSFRATIO[ISTORE] = 0.0;
       }
@@ -20174,12 +20302,25 @@ void  SIMLIB_prepCadence(int REPEAT_CADENCE) {
 	PSF[0] = SIMLIB_OBS_RAW.PSFSIG1[ISTORE];
 	PSF[1] = SIMLIB_OBS_RAW.PSFSIG2[ISTORE];
 	PSF[2] = SIMLIB_OBS_RAW.PSFRATIO[ISTORE];
-	NEA    = NoiseEquivAperture(PSF[0], PSF[1], PSF[2] );
+	if ( PSF_IS_MOFFAT ) {
+	  double fwhm_pix = PSF[0] * FWHM_SIGMA_RATIO; // PSF[0] is sigma (pixels)
+	  double alpha = moffat_alpha_from_fwhm(fwhm_pix, MOFFAT_BETA);
+	  NEA = moffat_nea_from_alpha(alpha, MOFFAT_BETA);
+	  if ( alpha <= 0.0 || NEA <= 0.0 ) {
+	    sprintf(c1err,"Invalid Moffat NEA computed from FWHM=%.4f pix, beta=%.3f",
+		    fwhm_pix, MOFFAT_BETA);
+	    sprintf(c2err,"Check SIMLIB PSF_UNIT: %s and MOFFAT_BETA", UNIT);
+	    errmsg(SEV_FATAL, 0, fnam, c1err, c2err);
+	  }
+	}
+	else {
+	  NEA    = NoiseEquivAperture(PSF[0], PSF[1], PSF[2] );
+	}
 	SIMLIB_OBS_RAW.NEA[ISTORE] = NEA ; // pixels
       }
       
       // 3b. Jun 2023 compute PSF_FWHM(arcsec)
-      PSF_FWHM = PSF[0] * PIXSIZE * 2.355 ;
+      PSF_FWHM = SIMLIB_OBS_RAW.PSFSIG1[ISTORE] * PIXSIZE * FWHM_SIGMA_RATIO ;
       SIMLIB_OBS_RAW.PSF_FWHM[ISTORE] = PSF_FWHM ;
 
       // 4. check for optional units of SKYSIG
@@ -24658,7 +24799,6 @@ int npe_above_saturation ( int epoch, double flux_pe) {
 
   double ccdgain    = SIMLIB_OBS_GEN.CCDGAIN[epoch] ;
   double skysig_adu = SIMLIB_OBS_GEN.SKYSIG[epoch] ;
-  double psfsig1    = SIMLIB_OBS_GEN.PSFSIG1[epoch] ; // pixels
   double PIX        = SIMLIB_OBS_GEN.PIXSIZE[epoch];  // pix size, arcsec
   double PI         = 3.1415926535 ;
 
@@ -24681,14 +24821,11 @@ int npe_above_saturation ( int epoch, double flux_pe) {
   skysig_pe = (skysig_adu * ccdgain) ;  // convert ADU -> pe
   sky_pe    = skysig_pe * skysig_pe ;   // sky counts per pix, Npe
 
-  // compute fraction of flux contained in 1 pixel at the
-  // center of the PSF.  For pixel size << PSF, flux-fraction
-  // is about PIXSIZE^2/2*PI*sigma^2. For safety, also include
-  // Taylor-expansion correction in areaCor factor below.
-  AREAPIX    = PIX*PIX ;
-  SQPSFSIG   = psfsig1*psfsig1 * AREAPIX ; // arcSec
-  areaCor    =   AREAPIX/(4.0*PI*SQPSFSIG);  // from Taylor expansion
-  areaFrac   = ( AREAPIX/(2.0*PI*SQPSFSIG) ) * ( 1.0 - areaCor );
+  // fraction of source flux in the central pixel (per exposure)
+  AREAPIX  = PIX * PIX ;
+  areaFrac = psf_central_pixel_frac(epoch);
+  areaCor  = 0.0; // (only meaningful for Gaussian Taylor approximation)
+  SQPSFSIG = -9.0;
 
   // flux in central pixel
   fluxtot_pe = (flux_pe*areaFrac) + sky_pe ;
@@ -31292,13 +31429,13 @@ void SIMLIB_DUMP_DRIVER(void) {
 
   FILE *fpdmp0, *fpdmp1 ;
   
-  double
-    MJD, MJD_LAST, MJD_LAST_FILTER[MXFILTINDX], GAPMAX, GAPAVG, MJDWIN, FRAC, *ptrmjd
-    ,ZPT_pe, PSF, SKYSIG_ADU, SKYSIG_pe ,ZPTERR, M5SIG
-    ,ZPT_SIMLIB, PSF_SIMLIB, SNR_maglimit
-    ,FSKY_pe, SKYMAG, RA, DEC, MWEBV
-    ,XNobs, TMP, TMP0,  TMP1, wgt_LCLIB, wgtsum_LCLIB=0.0
-    ,GLOBAL_RANGE_RA[2], GLOBAL_RANGE_DEC[2]
+	  double
+	    MJD, MJD_LAST, MJD_LAST_FILTER[MXFILTINDX], GAPMAX, GAPAVG, MJDWIN, FRAC, *ptrmjd
+	    ,ZPT_pe, PSF, SKYSIG_ADU, SKYSIG_pe ,ZPTERR, M5SIG
+	    ,ZPT_SIMLIB, PSF_SIMLIB, NEA_SIMLIB, FPIX, SNR_maglimit
+	    ,FSKY_pe, SKYMAG, RA, DEC, MWEBV
+	    ,XNobs, TMP, TMP0,  TMP1, wgt_LCLIB, wgtsum_LCLIB=0.0
+	    ,GLOBAL_RANGE_RA[2], GLOBAL_RANGE_DEC[2]
     ,GAIN_SIMLIB, PIXSIZE_SIMLIB
     ;
 
@@ -31482,7 +31619,7 @@ void SIMLIB_DUMP_DRIVER(void) {
     NVAR = 11 ;
    
     fprintf(fpdmp1,"VARNAMES: ROW "
-	    "LIBID FIELD  RA DEC MJD BAND ZP_pe SKYMAG PSF M5SIG   MJD_DIF MJD_DIF_BAND\n");
+	    "LIBID FIELD  RA DEC MJD BAND ZP_pe SKYMAG PSF M5SIG   MJD_DIF MJD_DIF_BAND NEA FPIX\n");
     fprintf(fpdmp1,"\n");
   }
 
@@ -31573,6 +31710,8 @@ void SIMLIB_DUMP_DRIVER(void) {
       ZPT_SIMLIB     = SIMLIB_OBS_GEN.ZPTADU[iep] ;
       SKYSIG_ADU     = SIMLIB_OBS_GEN.SKYSIG[iep] ;
       PSF_SIMLIB     = SIMLIB_OBS_GEN.PSFSIG1[iep] ;
+      NEA_SIMLIB     = SIMLIB_OBS_GEN.NEA[iep] ;
+      FPIX           = psf_central_pixel_frac(iep);
       PIXSIZE_SIMLIB = SIMLIB_OBS_GEN.PIXSIZE[1] ;
       sprintf(FIELDNAME, "%s", SIMLIB_OBS_GEN.FIELDNAME[iep] ); // Jun 25 2025
 
@@ -31595,7 +31734,14 @@ void SIMLIB_DUMP_DRIVER(void) {
       
       // calculate 5 sigma limiting mag
       SNR_maglimit = 5.0 ;
-      M5SIG = MAGLIMIT_calculator(ZPT_pe,PSF,SKYMAG, SNR_maglimit);
+      double PSF_maglimit = PSF;
+      if ( strcmp(SIMLIB_GLOBAL_HEADER.PSF_MODEL,"MOFFAT") == 0 ) {
+	// In MOFFAT mode, keep PSF as the (fixed) FWHM, but compute m5 from NEA.
+	const double OMEGA = 1.51; // must match MAGLIMIT_calculator
+	double nea_arcsec2 = NEA_SIMLIB * (PIXSIZE_SIMLIB * PIXSIZE_SIMLIB);
+	if ( nea_arcsec2 > 0.0 ) { PSF_maglimit = sqrt(nea_arcsec2) / OMEGA; }
+      }
+      M5SIG = MAGLIMIT_calculator(ZPT_pe,PSF_maglimit,SKYMAG, SNR_maglimit);
 
       // store M5SIG list for this entry 
       Nobs = (int)SIMLIB_DUMP_AVG1.NEPFILT[ifilt_obs] ;
@@ -31619,9 +31765,10 @@ void SIMLIB_DUMP_DRIVER(void) {
 	NROW_MJD++ ;
 	sprintf(cfilt, "%c", FILTERSTRING[ifilt_obs] );
 	fprintf(fpdmp1,"ROW: %3d %4d %s %.4f %.4f %.4f  "
-		"%s  %.3f  %.3f  %.3f %.3f   %.4f %.4f\n",
+		"%s  %.3f  %.3f  %.3f %.3f   %.4f %.4f %.3f %.6f\n",
 		NROW_MJD, ID, FIELDNAME, RA, DEC, MJD, 
-		cfilt, ZPT_pe, SKYMAG, PSF,  M5SIG, MJD_DIF, MJD_DIF_FILTER );
+		cfilt, ZPT_pe, SKYMAG, PSF,  M5SIG, MJD_DIF, MJD_DIF_FILTER,
+		NEA_SIMLIB, FPIX );
       }
 
       MJD_LAST = MJD;
@@ -31916,8 +32063,10 @@ void write_docana_SIMLIB_DUMP(FILE *fp, int OPT) {
     fprintf(fp,"\n");    
     fprintf(fp,"%sCOLUMN_NOTES:\n", pad);
     fprintf(fp,"%sLIBID:    Cadence ID in %s \n", pad2, INPUTS.SIMLIB_FILE);
-    fprintf(fp,"%sSKYMAG:   ADU/pixel\n", pad2 );
-    fprintf(fp,"%sPSF:      effective Gauss sigma (pixels) = sqrt[ NEA/(4*PI) ]\n", pad2);
+    fprintf(fp,"%sSKYMAG:   sky brightness (mag/arcsec^2)\n", pad2 );
+    fprintf(fp,"%sPSF:      PSF FWHM (arcsec)\n", pad2);
+    fprintf(fp,"%sNEA:      noise-equiv area (pixels)\n", pad2);
+    fprintf(fp,"%sFPIX:     fraction of PSF flux in central pixel\n", pad2);
     fprintf(fp,"%sMJD_DIF:       time since last observation (days)\n", pad2);
     fprintf(fp,"%sMJD_DIF_BAND:  time since last observation in same band (days)\n", pad2);
     fprintf(fp,"\n");
@@ -32762,4 +32911,3 @@ void print_sim_help(void) {
   return;
   
 } // end print_sim_help
-
