@@ -37,6 +37,9 @@
 #                 (original AI-pasted code was wrong)
 #     + fix to work with multiple @@WGTVAR values, same as with multuple @@CUT or @@V or @@TFILE.
 #
+# Mar 16 2026: new inputs @@HLINE and @@VLINE to draw horizontal and/or vertical line(s)
+# Mar 23 2026: fix to work with comma-sep csv as well as space-sep csv file.
+#
 # ==============================================
 import os, sys, gzip, copy, logging, math, re, gzip
 import pandas as pd
@@ -122,7 +125,7 @@ NMAX_CID_LIST = 50  # max number of CIDs to print for @@OPT CID_LIST
 # can be used in variables (@V) and weigts (@@WGTFUN).
 NUMPY_FUNC_DICT = {
     'exp'         :  'np.exp'  ,
-    'log10'       :  'np.log'  ,   # works for log and log10        
+    'log10'       :  'np.log10' ,   # works for log and log10        
     'log'         :  'np.log'  ,   # works for log and log10
     'sqrt'        :  'np.sqrt' ,
     'abs'         :  'np.abs'  ,
@@ -206,6 +209,7 @@ HACK_FLAG_DICT = {
     'help'              : HACK_FLAG_HELP    
 }
 
+COMMA = ','
 
 # ================================
 
@@ -629,6 +633,12 @@ def get_args():
 
     msg = "Extra text on plot"
     parser.add_argument('@@TEXT', '@@text', default=None, help=msg, nargs="+")    
+
+    msg = "dashed horizontal lines on plot (enter list of Y-coords"
+    parser.add_argument('@@HLINE', '@@hline', default=None, help=msg, nargs="+")    
+
+    msg = "dashed vertical lines on plot (enter list of X-coords"
+    parser.add_argument('@@VLINE', '@@vline', default=None, help=msg, nargs="+")    
 
     msg = "Override default legend on plot (space sep list per TFILE); auto-compute location"
     parser.add_argument('@@LEGEND', '@@legend', default=None, help=msg, nargs="+")
@@ -1709,7 +1719,7 @@ def read_tables(args, plot_info):
             # variables exist.
             # count number of rows to skip before VARNAMES; e.g., skip DOCANA for HOSTLIB 
 
-            varname_idrow, nrow_skip = check_table_varnames(tfile,args.raw_var_list)
+            varname_idrow, nrow_skip, colsep = check_table_varnames(tfile,args.raw_var_list)
             plot_info.varname_idrow  = varname_idrow            
             usecol_list = [ varname_idrow ] + args.raw_var_list
 
@@ -1719,7 +1729,7 @@ def read_tables(args, plot_info):
 
             # read table and store in data frame.
             # only read needed columms to reduce memory consumption.
-            df  = pd.read_csv(tfile, comment="#", sep=r"\s+",
+            df  = pd.read_csv(tfile, comment="#", sep=colsep,      # sep=r"\s+",
                               usecols  = usecol_list,
                               skiprows = nrow_skip,
                               nrows    = NROWS )
@@ -1995,9 +2005,17 @@ def check_table_varnames(tfile, var_list):
     MXROW_SKIP = 200 # stop checking after this many lines
 
     format_table = None
+    colsep       = r"\s+"  # default column separator is whitespace
 
     for line in t:
-        wdlist = line.split()
+
+        line  = line.rstrip()  # remove trailing space and linefeed 
+        if COMMA in line:
+            colsep = COMMA
+            wdlist = line.split(COMMA)
+        else:
+            wdlist = line.split()
+
         if len(wdlist) == 0 :
             nrow_read += 1
             continue
@@ -2011,7 +2029,7 @@ def check_table_varnames(tfile, var_list):
 
         if wdlist[0] == 'VARNAMES:' :            
             table_var_list = wdlist[1:]
-            format_table = FORMAT_SNANA_TABLE
+            format_table   = FORMAT_SNANA_TABLE
             break
         else:
             nrow_read += 1    
@@ -2021,7 +2039,8 @@ def check_table_varnames(tfile, var_list):
 
     if format_table == FORMAT_SNANA_TABLE:
         nrow_skip = nrow_read
-        logging.info(f"\t Format = {FORMAT_SNANA_TABLE}: found {nrow_skip} rows to skip before 'VARNAMES:' key")
+        logging.info(f"\t Format = {FORMAT_SNANA_TABLE}: found {nrow_skip} " \
+                     f"rows to skip before 'VARNAMES:' key")
     elif format_table == FORMAT_CSV:
         nrow_skip = 0
         logging.info(f"\t Format = {FORMAT_CSV}")
@@ -2038,6 +2057,9 @@ def check_table_varnames(tfile, var_list):
 
     n_idrow = len(varname_idrow)
     if n_idrow != 1 :
+        print(f"\nPre-ABORT dump")
+        print(f"  VALID_IDROW_LIST = {VALID_IDROW_LIST}")
+        print(f"  table_var_list = {table_var_list}")
         sys.exit(f"\n ERROR: found {n_idrow} ID columns: {varname_idrow}\n\t One and only one is allowed. ")
 
     varname_idrow = varname_idrow[0]  # switch from list back to scaler
@@ -2054,7 +2076,7 @@ def check_table_varnames(tfile, var_list):
             sys.exit(f"\n\t ABORT")
 
 
-    return varname_idrow, nrow_skip
+    return varname_idrow, nrow_skip, colsep
 
     # end check_table_varnames
 
@@ -2068,7 +2090,6 @@ def poisson_interval(k, alpha=0.32):
     from scipy.stats import chi2
     a = alpha
     low, high = (chi2.ppf(a/2, 2*k) / 2, chi2.ppf(1-a/2, 2*k + 2) / 2)
-
     low[k == 0]  = 0.0
     high[k == 0] = 0.0    
     
@@ -3007,7 +3028,9 @@ def apply_plt_misc(args, plot_info, plt_text_dict):
     do_logy      = OPT_LOGY      in OPT
     do_grid      = OPT_GRID      in OPT
     do_diag_line = OPT_DIAG_LINE in OPT
-    
+    hline_list   = args.HLINE
+    vline_list   = args.VLINE
+
     bounds_dict   = plot_info.bounds_dict
     axis_dict     = plot_info.axis_dict_list[0] # ?? fragile?
 
@@ -3042,8 +3065,18 @@ def apply_plt_misc(args, plot_info, plt_text_dict):
 
     if do_diag_line:
         x = np.linspace(xmin,xmax,100);  y = x
-        plt.plot(x,y, zorder=10)
+        plt.plot(x,y, zorder=10, linestyle='--')
     
+    if hline_list:
+        for y_hline in hline_list:
+            x = np.linspace(xmin,xmax,10);  y = [ float(y_hline) ]*10
+            plt.plot(x, y, zorder=10, linestyle='--', color='black')
+
+    if vline_list:
+        for x_vline in vline_list:
+            y = np.linspace(ymin,ymax,10);  x = [ float(x_vline) ]*10
+            plt.plot(x, y, zorder=10, linestyle='--', color='black')
+
     fsize_label = 12 * args.FONTSIZE_SCALE
     xlabel  = axis_dict['xaxis_label']
     ylabel  = axis_dict['yaxis_label']    

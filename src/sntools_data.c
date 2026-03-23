@@ -22,6 +22,8 @@
 #include  "sntools_host.h" 
 //#include  "sntools_trigger.h" 
 
+#include  <sys/stat.h>
+
 
 // =======================================================
 bool IS_SIMKEY_SNDATA(char *key) {
@@ -425,11 +427,16 @@ void copy_SNDATA_HEAD(int copyFlag, char *key, int NVAL,
 	{ copy_int(copyFlag, parVal, &SNDATA.HOSTGAL_FLAG[igal] ); } 
 
       sprintf(KEY_TEST,"%s_PHOTOZ", PREFIX); 
-      if ( strcmp(key,KEY_TEST) == 0 ) 
-	{ copy_flt(copyFlag, parVal, &SNDATA.HOSTGAL_PHOTOZ[igal] ); } 
+      if ( strcmp(key,KEY_TEST) == 0 ) { 
+	RD_OVERRIDE.ORIG_HOSTGAL_PHOTOZ[igal] = SNDATA.HOSTGAL_PHOTOZ[igal];
+	copy_flt(copyFlag, parVal, &SNDATA.HOSTGAL_PHOTOZ[igal] ); 
+      } 
+
       sprintf(KEY_TEST,"%s_PHOTOZ_ERR", PREFIX); 
-      if ( strcmp(key,KEY_TEST) == 0 ) 
-	{ copy_flt(copyFlag, parVal, &SNDATA.HOSTGAL_PHOTOZ_ERR[igal] ); } 
+      if ( strcmp(key,KEY_TEST) == 0 ) {
+	RD_OVERRIDE.ORIG_HOSTGAL_PHOTOZ_ERR[igal] = SNDATA.HOSTGAL_PHOTOZ_ERR[igal];
+	copy_flt(copyFlag, parVal, &SNDATA.HOSTGAL_PHOTOZ_ERR[igal] ); 
+      } 
 
       sprintf(KEY_TEST,"%s_SPECZ", PREFIX); 
       if ( strcmp(key,KEY_TEST) == 0 ) 
@@ -498,7 +505,8 @@ void copy_SNDATA_HEAD(int copyFlag, char *key, int NVAL,
       if ( strstr(key,PREFIX_ZPHOT_Q) != NULL ) {
 	for(q=0; q < SNDATA.HOSTGAL_NZPHOT_Q; q++ ) {
 	  PCT = SNDATA.HOSTGAL_PERCENTILE_ZPHOT_Q[q] ;
-	  sprintf(KEY_TEST,"%s_%s%3.3d", PREFIX, PREFIX_ZPHOT_Q, PCT);
+	  LOAD_VARNAME_ZPHOT_Q(PREFIX, PCT, KEY_TEST); // return KEY_TEST
+	  // xxxx mark delete sprintf(KEY_TEST,"%s_%s%3.3d", PREFIX, PREFIX_ZPHOT_Q, PCT);
 	  if ( strcmp(key,KEY_TEST) == 0 ) 
 	    { copy_flt(copyFlag, parVal, &SNDATA.HOSTGAL_ZPHOT_Q[igal][q]);  } 
 	}
@@ -775,6 +783,11 @@ void copy_SNDATA_HEAD(int copyFlag, char *key, int NVAL,
   return ;
 
 }  // end copy_SNDATA_HEAD
+
+
+void LOAD_VARNAME_ZPHOT_Q(char *PREFIX, int PCT, char *VARNAME) {
+  sprintf(VARNAME,"%s_%s%3.3d", PREFIX, PREFIX_ZPHOT_Q, PCT);
+}
 
 // = = = = = = = = = = = = = = = = = = = = = = = = 
 int select_MJD_SNDATA(double *CUTWIN_MJD) {
@@ -1285,15 +1298,19 @@ void RD_PRIVATE_INIT(char *PRIVATE_VARNAME_LIST) {
 } // end RD_PRIVATE_INIT
 
 // ==============================================
-void RD_OVERRIDE_INIT(char *OVERRIDE_FILE, int REQUIRE_DOCANA) {
+void RD_OVERRIDE_INIT(char *OVERRIDE_PATH, int REQUIRE_DOCANA) {
 
   // read and store columns from comma-sep list of  override files 
   // to override values in data headers (not photometry).
   // Allows float/double/int, but not strings
   // (e.g., cannot override SNID, FIELD, .. )
   //
-  // Oct 3 2023: add input REQUIRE_DOCANA
+  // Input *OVERRIDE_PATH is either a comma-sep list of files,
+  // or a folder containint [OVERRIDE_PATH].LIST with list of override files.
   //
+  // Oct 3 2023: add input REQUIRE_DOCANA
+  // Feb 24 2026: abort if there is a mix of override files keyed by CID and GALID
+  // Mar 20 2026: refactor to allow either file list or directory to be passed.
 
   int NROW, ivar, ifile, NFILE = 0;
   int OPTMASK_SNTABLE = 4;           // append next file
@@ -1304,17 +1321,24 @@ void RD_OVERRIDE_INIT(char *OVERRIDE_FILE, int REQUIRE_DOCANA) {
 
   // ----------- BEGIN -----------
 
-  RD_OVERRIDE.USE = false;
-  if ( IGNOREFILE(OVERRIDE_FILE) ) { return; }
 
-  // assume matching by CID (or SNID); below might switch to GALID match 
-  RD_OVERRIDE.MATCH_by_CID   = true ;
-  RD_OVERRIDE.MATCH_by_GALID = false ;
+  RD_OVERRIDE.USE = false;
+  if ( IGNOREFILE(OVERRIDE_PATH) ) { return; }
+
+  // init number of files matched by CID and by GALID
+  RD_OVERRIDE.NMATCH_by_CID   = 0 ;
+  RD_OVERRIDE.NMATCH_by_GALID = 0 ;
 
   print_banner(fnam);
 
+  // get list of override files
+  char *OVERRIDE_FILE_LIST = (char*)malloc(MXPATHLEN * 10 * sizeof(char) );
+  get_override_file_list(OVERRIDE_PATH, OVERRIDE_FILE_LIST);
+
+  if ( strlen(OVERRIDE_FILE_LIST) < 3 )  { return; }
+
   // split comma-sep OVERRIDE_FILE 
-  parse_commaSepList(fnam, OVERRIDE_FILE, MXFILE_OVERRIDE, MXPATHLEN,
+  parse_commaSepList(fnam, OVERRIDE_FILE_LIST, MXFILE_OVERRIDE, MXPATHLEN,
 		     &NFILE, &file_list ); // <== returned
   
 
@@ -1334,7 +1358,6 @@ void RD_OVERRIDE_INIT(char *OVERRIDE_FILE, int REQUIRE_DOCANA) {
       fclose(fp);
     }
 
-    // xxx mark delete Feb 10 2026:  ENVreplace(ptrFile, fnam, 1);
 
     NROW = SNTABLE_AUTOSTORE_INIT(ptrFile, TABLE_NAME, VARLIST,
 				  OPTMASK_SNTABLE );
@@ -1342,10 +1365,11 @@ void RD_OVERRIDE_INIT(char *OVERRIDE_FILE, int REQUIRE_DOCANA) {
     // store varname in 1st column used to match with data
     sprintf(RD_OVERRIDE.VARNAME_MATCH, "%s", READTABLE_POINTERS.VARNAME[0] ); //9.29.2025
     VARNAME_MATCH = RD_OVERRIDE.VARNAME_MATCH;
-    if ( strcmp(VARNAME_MATCH,"HOSTGAL_OBJID") == 0 ||
-	 strcmp(VARNAME_MATCH,"GALID")         == 0 ) {
-      RD_OVERRIDE.MATCH_by_CID   = false;
-      RD_OVERRIDE.MATCH_by_GALID = true;
+    if ( strcmp(VARNAME_MATCH,"HOSTGAL_OBJID") == 0 || strcmp(VARNAME_MATCH,"GALID") == 0 ) {
+      RD_OVERRIDE.NMATCH_by_GALID++ ;
+    }
+    else {
+      RD_OVERRIDE.NMATCH_by_CID++ ;
     }
 
     printf("   Stored %d rows of header-override data; match rows using %s\n", 
@@ -1357,6 +1381,15 @@ void RD_OVERRIDE_INIT(char *OVERRIDE_FILE, int REQUIRE_DOCANA) {
       errmsg(SEV_FATAL, 0, fnam, c1err, c2err); 
     }
   } // end ifile
+  
+  // Feb 24 2026: require all files to be keyed by CID or GALID, but mix is not allowed.
+  int N_by_CID   = RD_OVERRIDE.NMATCH_by_CID ;
+  int N_by_GALID = RD_OVERRIDE.NMATCH_by_GALID ;
+  if ( N_by_CID > 0 && N_by_GALID > 0 ) {
+    sprintf(c1err,"%d/%d HEADER_OVERRIDE files are keyed by CID/GALID;", N_by_CID, N_by_GALID);
+    sprintf(c2err,"All OVERRIDE files must be keyed by CID or GALID; mix not allowed." );
+    errmsg(SEV_FATAL, 0, fnam, c1err, c2err);       
+  }
 
   // - - - - - - - - - - - - 
   RD_OVERRIDE.USE    = true ;
@@ -1368,6 +1401,7 @@ void RD_OVERRIDE_INIT(char *OVERRIDE_FILE, int REQUIRE_DOCANA) {
   // set z logicals in case zHEL <-> zCMB needs to be recomputed
   RD_OVERRIDE.FOUND_zCMB = false ;
   RD_OVERRIDE.FOUND_zHEL = false ; 
+  RD_OVERRIDE.FOUND_HOSTGAL_ZPHOT = false;
   RD_OVERRIDE.NZPHOT_Q   = 0 ;
   RD_OVERRIDE.FOUND_NAME_IAUC      = false;
   RD_OVERRIDE.FOUND_NAME_TRANSIENT = false;
@@ -1378,6 +1412,8 @@ void RD_OVERRIDE_INIT(char *OVERRIDE_FILE, int REQUIRE_DOCANA) {
     { RD_OVERRIDE.FOUND_zCMB = true; }
   if ( EXIST_VARNAME_AUTOSTORE("REDSHIFT_HELIO") ) 
     { RD_OVERRIDE.FOUND_zHEL = true; }
+  if ( EXIST_VARNAME_AUTOSTORE("HOSTGAL_PHOTOZ") ) 
+    { RD_OVERRIDE.FOUND_HOSTGAL_ZPHOT = true; } // Mar 6 2026
 
   if ( EXIST_VARNAME_AUTOSTORE("NAME_IAUC") ) 
     { RD_OVERRIDE.FOUND_NAME_IAUC = true; }
@@ -1408,12 +1444,111 @@ void RD_OVERRIDE_INIT(char *OVERRIDE_FILE, int REQUIRE_DOCANA) {
   RD_OVERRIDE.NVAR_USE    = 0;
   RD_OVERRIDE.ID_LAST[0]  = 0; // Aug 8 2025
   RD_OVERRIDE.NEVT        = 0; 
+  RD_OVERRIDE.N_HOSTGAL_PHOTOZ_REPLACE = 0 ;
 
   printf("\n Finished %s\n\n", fnam);
+  free(OVERRIDE_FILE_LIST);
 
   return ;
 
 } // end RD_OVERRIDE_INIT
+
+void get_override_file_list(char *OVERRIDE_PATH, char *OVERRIDE_FILE_LIST) {
+
+  // Created Mar 20 2026
+  // For input OVERRIDE_PATH, return comma-sep list of files in
+  // OVERRIDE_FILE_LIST. 
+  // If *OVERRIDE_PATH is already a file list, return OVERRIDE_FILE_LIST = OVERRIDE_PATH.
+  // If *OVERRIDE_PATH is a directory, read LIST file from directory that contains
+  // list file override files.
+
+  bool IS_FILE = false ;
+  bool IS_DIR  = false ;
+  bool IS_LINK = false ;
+  int  istat, istat_link; 
+  struct stat statbuf, linkbuf ; 
+  int LDMP = 0 ;
+  char cWARN[20];
+  char OVERRIDE_PATH_LOCAL[MXPATHLEN]; // more memory for ENVreplace
+  char fnam[] = "get_override_file_list" ;
+
+  // ----------- BEGIN ---------
+
+  OVERRIDE_FILE_LIST[0] = 0 ;
+  sprintf(OVERRIDE_PATH_LOCAL, "%s", OVERRIDE_PATH);
+
+  // if there is a comma, then it has to be a file list
+  if (strstr(OVERRIDE_PATH_LOCAL,COMMA) != NULL ) {  
+    IS_FILE = true ;  
+  }
+  else {
+    // use stat function to determine file vs. path
+    ENVreplace(OVERRIDE_PATH_LOCAL, fnam, 1);
+
+    istat       =  stat(OVERRIDE_PATH_LOCAL, &statbuf);
+    istat_link  = lstat(OVERRIDE_PATH_LOCAL, &linkbuf);
+    IS_DIR      = S_ISDIR(statbuf.st_mode);
+    IS_LINK     = S_ISLNK(linkbuf.st_mode);
+    IS_FILE     = !IS_DIR ;
+  }
+
+  if ( LDMP ) {
+    printf("\n xxx %s DUMP -------------------------------- \n", fnam );
+    printf(" xxx %s: OVERRIDE_PATH = '%s' \n", fnam, OVERRIDE_PATH_LOCAL);
+    printf(" xxx %s: IS[DIR,FILE,LINK] = %d  %d  %d\n", fnam, IS_DIR, IS_FILE, IS_LINK) ;
+    fflush(stdout);
+  }
+
+  // - - - 
+  if ( IS_FILE ) {
+    sprintf(OVERRIDE_FILE_LIST, "%s", OVERRIDE_PATH_LOCAL);
+  }
+  else {
+    // for /path/base, check list file with name  /path/base/base.LIST
+    char *basename = strrchr(OVERRIDE_PATH_LOCAL, '/'); // basename include slash    
+    char *LIST_FILE = (char*) malloc(MXPATHLEN * sizeof(char) );
+    char *tmp_file  = (char*) malloc(MXPATHLEN * sizeof(char) );
+    char *TMP_FILE  = (char*) malloc(MXPATHLEN * sizeof(char) );
+    int i, NF;
+
+    if ( IS_LINK ) { // show resolved symlink
+      char symlink[MXPATHLEN];  ssize_t count;
+      count = readlink(OVERRIDE_PATH_LOCAL, symlink, sizeof(symlink) - 1);
+      symlink[count] = '\0'; // Manually null-terminate
+      printf("  Resolve OVERRIDE symLink: %s -> %s\n", &basename[1],  symlink ); fflush(stdout);
+    }
+    sprintf(LIST_FILE, "%s/%s.LIST", OVERRIDE_PATH_LOCAL, &basename[1] );
+
+    if ( LDMP ) {
+      printf(" xxx %s: basename = %s \n", fnam, basename);
+      printf(" xxx %s: LIST_FILE = %s \n", fnam, LIST_FILE);      
+    }
+    NF = store_PARSE_WORDS(MSKOPT_PARSE_WORDS_FILE, LIST_FILE, fnam);
+
+    cWARN[0] = 0;    if ( NF == 0 ) { sprintf(cWARN,"WARNING:"); }
+
+    printf("  %s Found %d OVERRIDE files in folder \n   %s : \n", cWARN, NF, OVERRIDE_PATH_LOCAL);
+    for (i=0; i < NF; i++ ) {
+      get_PARSE_WORD(LANGFLAG_PARSE_WORDS_C, i, tmp_file, fnam);
+      sprintf(TMP_FILE, "%s/%s", OVERRIDE_PATH_LOCAL, tmp_file);
+      catVarList_with_comma(OVERRIDE_FILE_LIST,TMP_FILE);
+      printf("\t %s \n", tmp_file);
+    }
+    free(LIST_FILE); free(tmp_file); free(TMP_FILE);
+    // .xyz
+  }
+
+  if ( LDMP ) {
+    printf(" xxx %s: final OVERRIDE_FILE_LIST = \n xxx %s \n", 
+	   fnam, OVERRIDE_FILE_LIST); 
+  }
+
+  fflush(stdout);
+  //debugexit(fnam); // xxx REMOVE
+
+  return;
+
+} // end get_override_file_list
 
 
 // ==================================================
@@ -1457,7 +1592,7 @@ int RD_OVERRIDE_FETCH(char *CID, long long int GALID, char *VARNAME, double *DVA
 
   // - - - - - -
   ID_LOCAL[0] = 0 ;
-  if ( RD_OVERRIDE.MATCH_by_CID ) 
+  if ( RD_OVERRIDE.NMATCH_by_CID > 0 ) 
     { sprintf(ID_LOCAL,"%s", CID);  }
   else if ( GALID != 0 )
     { sprintf(ID_LOCAL,"%lld", GALID);  }
@@ -1608,13 +1743,19 @@ void rd_override_append(void) {
 void rd_override_zcalc(void) {
 
   // If either zCMB or zHEL is on override list; recompute the other.
-  
-  double RA, DEC, zCMB, zHEL ;
-  bool FOUND_z= ( RD_OVERRIDE.FOUND_zCMB || RD_OVERRIDE.FOUND_zHEL );
+  // Mar 7 2026: if HOSTGAL_PHOTOZ is on iverride list and current REDSHIFT_FINAL < 0,
+  //             update REDSHIFT_FINAL and its error.
+
+  double RA, DEC, zCMB, zHEL, zHELERR ;
+  bool FOUND_z = ( RD_OVERRIDE.FOUND_zCMB || 
+		   RD_OVERRIDE.FOUND_zHEL || 
+		   RD_OVERRIDE.FOUND_HOSTGAL_ZPHOT);
+
   char fnam[] = "rd_override_zcalc" ;
   // ---------- BEGIN -------------
 
   if ( !FOUND_z ) { return; }
+
   RA  = SNDATA.RA_AVG;  
   DEC = SNDATA.DEC_AVG ;
 
@@ -1629,6 +1770,47 @@ void rd_override_zcalc(void) {
     SNDATA.REDSHIFT_FINAL = (float)zCMB ;
   }
 
+  // - - - - -
+  if ( RD_OVERRIDE.FOUND_HOSTGAL_ZPHOT ) {
+
+    double zPHOT          = SNDATA.HOSTGAL_PHOTOZ[0];
+    double zPHOTERR       = SNDATA.HOSTGAL_PHOTOZ_ERR[0];
+    double zPHOT_ORIG     = RD_OVERRIDE.ORIG_HOSTGAL_PHOTOZ[0];
+    double zPHOTERR_ORIG  = RD_OVERRIDE.ORIG_HOSTGAL_PHOTOZ_ERR[0];
+    double zHEL_ORIG      = SNDATA.REDSHIFT_HELIO;
+    double zHELERR_ORIG   = SNDATA.REDSHIFT_HELIO_ERR;
+    bool UPD1_zFINAL, UPD2_zFINAL ;
+
+    // update REDSHIFT_FINAL if current REDSHIFT_FINAL[HELIO] are not defined (-9),
+    // or if REDSHIFT_HELIO is already equal to the old HOSTGAL_PHOTOZ value. .xyz
+    UPD1_zFINAL = ( zHEL_ORIG < 0.0 );
+    UPD2_zFINAL = ( fabs(zHEL_ORIG-zPHOT_ORIG)<1.0E-4  && 
+		    fabs(zHELERR_ORIG-zPHOTERR_ORIG)<1.0E-3 );
+   
+    if ( UPD1_zFINAL || UPD2_zFINAL ) {    
+      zCMB     = zhelio_zcmb_translator(zPHOT,RA,DEC,COORDSYS_EQ,+1);
+      SNDATA.REDSHIFT_HELIO     = (float)zPHOT;
+      SNDATA.REDSHIFT_HELIO_ERR = (float)zPHOTERR;
+      SNDATA.REDSHIFT_FINAL     = (float)zCMB ;    
+      SNDATA.REDSHIFT_FINAL_ERR = (float)zPHOTERR ;
+    }
+
+    // Mar 7 2026: print a few diagnostic updates for this special case
+    //        beware; this diagnostic dump has not been seen yet ??
+    if ( UPD2_zFINAL ) {
+      RD_OVERRIDE.N_HOSTGAL_PHOTOZ_REPLACE++ ;
+      if ( RD_OVERRIDE.N_HOSTGAL_PHOTOZ_REPLACE < 10 ) {
+	printf("\n HOSTGAL_PHOTOZ OVERRIDE UPDATE: REDSHIFT_HELIO=%.4f -> %.4f for CID=%s \n\n",
+	       zHEL_ORIG, zPHOT, SNDATA.CCID); 
+	//printf(" xxx OVERRIDE zPHOT_ORIG = %f +_ %f (CID=%s)\n", 
+	//     zPHOT_ORIG, zPHOTERR_ORIG, SNDATA.CCID); // xxxx
+	fflush(stdout);
+      }
+    }
+
+  } // end RD_OVERRIDE.FOUND_HOSTGAL_ZPHOT
+
+
   return ;
 
 } // end rd_override_zcalc
@@ -1640,6 +1822,10 @@ void rd_override_zphot_q(int OPT) {
   // Input:
   //  OPT=1 --> init by determining NZPHOT_Q and PERCENTILES
   //  OPT=2 --> read zphot_q values
+  //
+  // @@@@@@@@@@@
+  // TO-DO: make this work for optional 2nd HOSTGAL2_ZPHOT_Q ... .xyz ???
+  // @@@@@@@@@@@
   //
   // Oct 14 2025: 
   //  + abort on mis-match number of quantiles in override file.
@@ -1664,7 +1850,7 @@ void rd_override_zphot_q(int OPT) {
 		       &NZPHOT_Q, &RD_OVERRIDE.VARLIST_ZPHOT_Q ); // <== returned
     free(VARSTRING);
 
-    printf("\n  Prepare HOST-zPHOT quantile override with NZPHOT_Q = %d\n", 
+    printf("\n  Prepare HOSTGAL_ZPHOT_Q quantile override with NZPHOT_Q = %d\n", 
 	   NZPHOT_Q ); 
     fflush(stdout);
 

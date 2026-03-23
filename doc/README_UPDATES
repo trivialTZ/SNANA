@@ -23330,6 +23330,7 @@ TASK081_ZPHOT_SDSS_MLCS+HOST_5PAR       :  mis-match (REF != TEST)
      + disable scatter for GRIDGEN option (for PSNID)
 
  
+  
    rename sntools_npz.c to sntools_npz.cpp (for autotools)
 
    remove src/fcasplit.F src/SIMSED_fudge.c    util/obdatamc.py
@@ -23492,6 +23493,14 @@ TASK081_ZPHOT_SDSS_MLCS+HOST_5PAR       :  mis-match (REF != TEST)
        Default PRIOR_MJDSIG = 20.0  -> 1E9 (flat)
        Beware for fitting BayeSN, MLCS, SNOOPY
 
+       New flat-top prior on DMU = MU-MU_theory:
+         PRIOR_DMU_RANGE(2) and PRIOR_DMU_SIGMA (gauss roll-off)
+       Beware that original PRIOR_MUERRSCALE is based on errors on Om,w0,wa
+
+    snlc_sim.c
+      fixed nasty memory leak using spectrograph feature; see free(NULL_FLAMERR_LIST)
+
+   
          *****  USEFUL(v12_01c) *****
 
     snana.F90: 
@@ -23499,6 +23508,8 @@ TASK081_ZPHOT_SDSS_MLCS+HOST_5PAR       :  mis-match (REF != TEST)
         SIM_COMPACT_noFLUXCAL to identify (roman-desc) sim in which
         only MJD, BAND, SIM_MAGOBS appear in PHOT file and there is 
         no FLUXCAL[ERR]
+      + new &SNLCINP  [SIM_]HEADER_OVERRIDE_DIR pointing to a folder
+        of header overrides
 
      snlc_fit.F90
       + new option to make table of priors for plotting;        
@@ -23514,14 +23525,19 @@ TASK081_ZPHOT_SDSS_MLCS+HOST_5PAR       :  mis-match (REF != TEST)
      snlc_sim.c:
        + fix malloc bug in function prep_GENPDF_FLAT(); 
            see https://github.com/RickKessler/SNANA/issues/1606
-
        + fix subtle bug truncating HOST_NMATCH <= MXHOSTGAL (=2)
-     
+       + new util REQUEST_USER_SPECTRA() used to decide whether or not
+         to abort in init_genSpec; fixes problem of SIMSED.SNIax abort
+         when a SPECTROGRAPH table exists but no spectra are requested.
+
      plot_table.py
        + enable plotting strings (e.g., FIELD or SURVEY) and print string
          label under each tick mark. Works for 1D or 2D plots.
        + fix STDEV calculation using WGTVAR  (fix AI bug that I missed last Sep 2025)
        + allow multipe @@WGTVAR values to overlay with different weights
+       + new option @@HLINE and @@VLINE to draw horizontal or vertical line(s)
+          in dashed black
+       + fix to work with comma-sep csv file and space sep csv.
 
      snana.F90;  
        + add &SNLCINP input CUTWIN_HOST_NMATCH
@@ -23533,16 +23549,47 @@ TASK081_ZPHOT_SDSS_MLCS+HOST_5PAR       :  mis-match (REF != TEST)
          ENVreplace was called after REQUIRE_DOCANA check, so moved 
          this call to before REQUIRE_DOCANA check.
 
+       + abort on mix of header-override files key by CID and GALID;
+         must be all keyed by CID or GALID
+       + if HOSTGAL_PHOTOZ in on override list and REDSHIFT_FINAL < 0,
+          update REDSHIFT_FINAL and REDSHIFT_HELIO (and their errors)
+
+     sntools_dataformat_fits.c:
+       + fix bug updating QUANTILE overrides to re-written FITS file;
+          quantile values were fine; bug was in defining column name,
+       
      SALT2mu.c:
        - fix sort_IDSAMPLE_biasCor to properly account for zSPEC/zPHOT;
           see https://github.com/RickKessler/SNANA/issues/1610
-       - for SUBPROCESS files that never close, replace rewind with
-          new rewind_and_purge() in sntools.c to actually remove contents; 
-          this removes
-          strange artifacts from previous STDOUT lines appearing in
-          current STDOUT file. 
+       - for SUBPROCESS-opened files that never close (for D2DFIT), replace rewind
+         with new rewind_and_purge() in sntools.c to actually remove contents
+         of file; this change removes strange artifacts from previous STDOUT lines 
+         appearing in current STDOUT file. 
+       - fix subtle bug in applyCut_chi2max() so that probcc_beams is loaded;
+         here is change for regress test that includes this cut:
+             TASK113_SALT2mu_DES3YR_COVADD  :  mis-match (REF != TEST)
+               ==> REF:  fit-Beta = 3.1122e+00 +/- 1.4986e-01
+               ==> TEST: fit-Beta = 3.1122e+00 +/- 1.4968e-01
+       - add call to release_all_malloc() at end of job;
+          mainly to avoid false errors using valgrind.
 
-    ITABLE_PDF_MARG NOTES:
-        CID  IBIN_PDF  PKMJD x0 x1 AV zPHOT  MINMASK   PDF
-    
+   sntools_trigger.c[h]:
+      - enable spec-efficiency map for SNRSUM_REST_V of spectrograph
+      - in gen_SEARCHEFF_SPEC, field MATCH was evaluated but not checked,
+        meaning the FIELD key in SEARCHEFF_SPEC_FILE was ignored --> fixed.
+      - new optional key in zHOST map: OPT_FIELDMATCH_REQUIRE; see manual
+
+      - set APPLYMASK_SEARCHEFF_zSPEC (8) to allow user to select 
+        zSPEC from either SPECID or from zHOST; e.g
+          APPLY_SEARCHEFF_MASK: 9 # 1(pipeline + 8(zSPEC)
+
+      - sim input "REFAC_SEARCHEFF_MAP: 1" implements refactor
+        to use same SPEC-EFF tools/maps on zHOST EFF.
+
+   sntools_genGauss_asym.c:
+     + inside prepIndex_GENGAUSS(), add array bound protection before calling
+       copy_GENGAUSS_ASYM(); should fix dust2dust crash.
+
+   submit_prog_combine.py: fix bug to avoid scooping up tables other than FITRES
+
 END: 

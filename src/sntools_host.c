@@ -4479,8 +4479,7 @@ void init_HOSTLIB_ZPHOT_QUANTILE(void) {
     for(q=0; q < N_Q; q++ ) {
       percentile = q * qbin;
       HOSTLIB.PERCENTILE_ZPHOT_Q[q] = percentile ;
-      sprintf(HOSTLIB.VARNAME_ZPHOT_Q[q],"%s%3.3d", 
-	      PREFIX_ZPHOT_Q, percentile);
+      sprintf(HOSTLIB.VARNAME_ZPHOT_Q[q], "%s%3.3d", PREFIX_ZPHOT_Q, percentile);
     }
   }
 
@@ -5654,8 +5653,9 @@ int IVAR_HOSTLIB(char *varname, int FLAG) {
   // For input variable name return 'IVAR' index
   // to be used  the array HOSTLIB.VALUE_ZSORTED[ivar].
   // 
+  // FLAG  = 0  : return -9 if key not found
   // FLAG += 1  : abort if key not found; else return -9
-  // FLAG += 2  : case sensitive compar (default is case insensitive)
+  // FLAG += 2  : case sensitive compare (default is case insensitive)
   //
   // Feb 2014: use case-insenstive string check.
   // Apr 2021: FLAG +=2 for case-sensitive compare; e.g., b_obs != B_obs

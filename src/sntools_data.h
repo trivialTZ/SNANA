@@ -5,10 +5,8 @@
 
  ******************************************/
 
-#define MXFILE_OVERRIDE 10
-// xxx mark delete #define MXVAR_OVERRIDE  40
-#define IVARMAX_OVERRIDE  200  // max IVAR in override file, so this can be large even with only 1 override var
-
+#define MXFILE_OVERRIDE   10
+#define IVARMAX_OVERRIDE  200  // max IVAR;  can be large even with only 1 override var
 
 struct {
   bool USE;
@@ -16,11 +14,11 @@ struct {
   int NVAR;  // number of override variables
   int N_PER_VAR[IVARMAX_OVERRIDE] ;
 
-  bool MATCH_by_CID, MATCH_by_GALID; // 9.29.2025
+  int NMATCH_by_CID, NMATCH_by_GALID;
   char VARNAME_MATCH[40];  // e.g., CID, SNID, GALID ...
 
   // logicals to decide if zCMB or zHEL needs to be recomputed.
-  bool FOUND_zCMB, FOUND_zHEL ;
+  bool FOUND_zCMB, FOUND_zHEL, FOUND_HOSTGAL_ZPHOT ;
   int  NZPHOT_Q ; // number of ZPHOT_Q[nnn] quantiles (May 2023)
   char **VARLIST_ZPHOT_Q;
 
@@ -32,6 +30,9 @@ struct {
   int  NVAR_USE; // number of override variables used (Aug 2025)
 
   char ID_LAST[40]; // last CID or GALID passed; used to count NUSE_OVERRIDE
+
+  int   N_HOSTGAL_PHOTOZ_REPLACE;
+  float ORIG_HOSTGAL_PHOTOZ[4], ORIG_HOSTGAL_PHOTOZ_ERR[4]; // for special REDSHIFT_FINAL update
 
 } RD_OVERRIDE;
 
@@ -52,6 +53,7 @@ void copy_SNDATA_OBS(int copyFlag, char *key,
                      int NVAL,char *stringVal, double *parVal);
 int  select_MJD_SNDATA(double *CUTWIN_MJD);
 void host_property_list_sndata(char *HOST_PROPERTY_LIST);
+void LOAD_VARNAME_ZPHOT_Q(char *PREFIX, int PCT, char *VARNAME) ; 
 
 void copy_GENSPEC(int copyFlag, char *key, int ispec, double *parVal);
 
@@ -66,6 +68,7 @@ bool IS_SIMKEY_SNDATA(char *key);
 void RD_OVERRIDE_INIT(char *OVERRIDE_FILE, int REQUIRE_DOCANA);
 int  RD_OVERRIDE_FETCH(char *CCID, long long int GALID, char *VARNAME, double *DVAL, char *STRVAL);
 void RD_OVERRIDE_POSTPROC(void); 
+void get_override_file_list(char *OVERRIDE_PATH, char *OVERRIDE_FILE_LIST);
 void rd_override_append(void);
 void rd_override_zcalc(void);
 void rd_override_zphot_q(int OPT);

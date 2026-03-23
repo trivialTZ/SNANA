@@ -18,6 +18,7 @@
 \usepackage{hyperref}
 %\usepackage{epsfig}
 \usepackage{graphicx}
+\usepackage{cprotect}
 
 \setlength{\textheight}{9.5in}
 \setlength{\textwidth}{7.0in}
@@ -3261,26 +3262,23 @@ function of redshift, peak-mags, peak colors, and closest time to peak.
 this function from the data and simulations.
 Rather than using an analytical form for $\simeffspec$,
 the simulated efficiency is defined on a multi-dimensional
-grid of redshift, peak-magnitudes and peak-colors.
-An example is shown here,
+grid of many variables.
+An example of definining the $\simeffspec$ map is shown here,
 \begin{verbatim}
   SEARCHEFF_SPEC_FILE:  $SNDATA_ROOT/models/searcheff/SEARCHEFF_SPEC_SDSS.DAT
   SEARCHEFF_SPEC_SCALE: 0.8  # default=1.0
        or
-  SEARCHEFF_SPEC_FILE:  ZERO  # force EFF_SPEC=0 without map
+  SEARCHEFF_SPEC_FILE:  ZERO  # force EFF_SPECID=0 without map
        or
-  SEARCHEFF_SPEC_FILE:  ONE   # force EFF_SPEC=1 without map
+  SEARCHEFF_SPEC_FILE:  ONE   # force EFF_SPECID=1 without map
        or
-  SEARCHEFF_SPEC_FILE:  NONE  # force EFF_SPEC=1 without map
+  SEARCHEFF_SPEC_FILE:  NONE  # force EFF_SPECID=1 without map
 \end{verbatim}
 % $
-%illustrating both the format and the default location.
-%If this file does not exist for a particular survey 
-%(i.e, ``SDSS'' replaced by your survey in the filename)
-If this file is not specified, then $\simeffspec=1$.
+If this file is not specified, then default $\simeffspec=1$.
 For each simulated SN, $\simeffspec$ is determined from 
 multi-dimensional (linear) interpolation. 
-If more than one grid is given 
+If more than one grid map is given in the same $\simeffspec$-map file,
 the logical OR among the efficiencies is used;
 this feature may be useful in cases where different telescopes
 take spectra for SNe in different magnitude ranges.
@@ -3304,12 +3302,13 @@ $i$ band magnitudes above 22.
 The second map depends on the absolute peak $r$-band magnitude
 and the $g-r$ color at peak.
 The 3rd map depends on the $i$-band magnitude and redshift,
-and applies only for the field named 'DEEPFIELD':
-the 'FIELD:' option allows for field-dependent maps.
+and applies only for fields named 'DEEP1' and 'DEEP2'.
+The 'FIELD:' option allows for field-dependent maps,
+and the FIELD key must appear before VARNAMES key.
 There essentially is no limit to the complexity: 
 for example, one could define 
 ``{\tt VARNAMES: g  r  i  g-r  r-i  REDSHIFT SPECEFF}''
-assuming that such a function could be determined.
+assuming that such a function can be determined.
 A list of valid {\tt VARNAMES} is shown in 
 Fig.~\ref{fig:speceff_varnames}.
 
@@ -3319,29 +3318,29 @@ Fig.~\ref{fig:speceff_varnames}.
 \caption{Illustration of \spec\ \eff\ format for the \snana\ simulation.}
 \label{fig:speceff}
 \begin{Verbatim}[frame=single]
-# TABLE 1 -- ensure 100% eff at low redshift
+# TABLE 1 -- ensure SPECEFF=1 at low redshift
   VARNAMES:  REDSHIFT  SPECEFF
   SPECEFF:    0.0      1.00
   SPECEFF:    0.1      1.00
 
 # TABLE 2 -- 4m telescope
-  VARNAMES:  g-r   r   SPECEFF  # can add comments here
-  SPECEFF:  -0.5  18.0  1.0
-  SPECEFF:  -0.5  20.0  0.6
-  SPECEFF:  -0.5  22.0  0.3
-  SPECEFF:  +0.5  18.0  0.2
-  SPECEFF:  +0.5  20.0  0.08
-  SPECEFF:  +0.5  22.0  0.02
+  VARNAMES:  g-r   r      SPECEFF  # can add comments here
+  SPECEFF:  -0.5  18.0     1.0
+  SPECEFF:  -0.5  20.0     0.6
+  SPECEFF:  -0.5  22.0     0.3
+  SPECEFF:  +0.5  18.0     0.2
+  SPECEFF:  +0.5  20.0     0.08
+  SPECEFF:  +0.5  22.0     0.02
 
 # TABLE 3 -- 8m telescope
-  VARNAMES: REDSHIFT  i   SPECEFF  
-  FIELD:    DEEPFIELD
-  SPECEFF:    0.0    22.0  1.0
-  SPECEFF:    0.0    24.0  0.66
-  SPECEFF:    0.0    26.0  0.31  # can add comments here
-  SPECEFF:    0.5    22.0  0.22
-  SPECEFF:    0.5    24.0  0.14
-  SPECEFF:    0.5    26.0  0.022
+  FIELD:    DEEP1,DEEP2   # comma-sep or '+' sep list of fields; BEFORE VARNAMES
+  VARNAMES: REDSHIFT  i     SPECEFF  
+  SPECEFF:    0.0    22.0    1.0
+  SPECEFF:    0.0    24.0    0.66
+  SPECEFF:    0.0    26.0    0.31  # can add comments here
+  SPECEFF:    0.5    22.0    0.22
+  SPECEFF:    0.5    24.0    0.14
+  SPECEFF:    0.5    26.0    0.022
 \end{Verbatim} 
 \end{center} 
 \end{figure}
@@ -3367,6 +3366,7 @@ Fig.~\ref{fig:speceff_varnames}.
   * LOGMASS          # hsot galaxy LOGMASS
   * HOSTMAG_[band]   # mag of host galaxy in [band]
   * SBMAG_[band]     # surface brightness mag/arcsec^2 in [band]
+  * SNRSUM_REST_V    # synthetic rest-frame V band from spectrograph
 \end{Verbatim}
 \end{center}
 \end{figure}
@@ -3378,10 +3378,10 @@ however, this \eff\ can depend on the particular SN model
 for two reasons. First, there is an overall magnitude offset
 between different SN models. Second, asymmetric 
 (dim-side) tails in the stretch and color distributions
-may not be properly modeled. To correct for the first 
-case there is a sim-input parameter 
+may not be properly modeled. To investigate the first 
+case (e.g., systematics) the sim-input parameter 
 ``{\tt MAGSHIFT\_SPECEFF: <shift>}'' 
-to shift the peak magnitude used to determine $\simeffspec=0$
+shifts the peak magnitude used to determine $\simeffspec=0$
 from the grid-map.  The second problem can be fixed only
 by using distributions with appropriate tails.
 
@@ -3406,7 +3406,7 @@ which forces spec-confirmed events to have {\tt PEAKMJD} in-season;
 i.e., between the first and last observation of a season, where
 a season is defined as a set of observations with gaps less than 90 days.
 This map alone would select every in-season event as spec-confirmed,
-but addition peakmag-dependent maps can be added to the same file.
+but additional peakmag-dependent maps can be added to the same file.
 
 
 \bigskip
@@ -3422,39 +3422,38 @@ in a bit-mask in each data file, defined as follows:
    SIM_SEARCHEFF_MASK += 1   # detected by image-subtraction
    SIM_SEARCHEFF_MASK += 2   # spectroscopically confirmed
    SIM_SEARCHEFF_MASK += 4   # unconfirmed with host redshift (next section)
+   SIM_SEARCHEFF_MASK += 8   # zSPEC from either spec-confirmation of zSPEC
 \end{Verbatim}
 %
-And here are some command examples,
+Here are some examples to interpret this mask:
 %
 \begin{Verbatim}[frame=single]
-   SIM_SEARCHEFF_MASK = 1   # detected by image-subtr; spec-unconfirmed
-   SIM_SEARCHEFF_MASK = 2   # failed image-subtr, but spec-confirmed
-   SIM_SEARCHEFF_MASK = 3   # detected by image-subtr & spec confirmed
-   SIM_SEARCHEFF_MASK = 5   # detected by image-subtr, unconfirmed with zHOST
+   SIM_SEARCHEFF_MASK = 1    # detected by image-subtr;  spec-unconfirmed
+   SIM_SEARCHEFF_MASK = 11   # detected by image-subtr & spec confirmed
+   SIM_SEARCHEFF_MASK = 13   # detected by image-subtr, unconfirmed with zHOST
+   SIM_SEARCHEFF_MASK = 15   # detected by image-subtr; spec-confirmed and zSPEC
 \end{Verbatim}
 %
-Note that {\tt SIM\_SEARCHEFF\_MASK}$ = 2$ corresponds
-to an unphysical case since it is unlikely to get a spectrum
-of a SN that was not identified by the image-subtraction pipeline.
 Although the search \effs\ are always evaluated, the user has
 the option to apply these efficiencies in the simulation,
 or to write out all simulated SNe and use the 
 {\tt SIM\_SEARCHEFF\_MASK} for further investigation.
-The following sim-input keys control trigger selection:
+The following sim-input key controls event selection:
 %
 \begin{Verbatim}[frame=single]
-   APPLY_SEARCHEFF_OPT: 0  # keep all SNe (default)
-   APPLY_SEARCHEFF_OPT: 1  # keep SN if software trigger passes
-   APPLY_SEARCHEFF_OPT: 3  # keep SN if software and spec triggers pass
-   APPLY_SEARCHEFF_OPT: 5  # keep SN if software trigger and zHOST
+   APPLY_SEARCHEFF_OPT: 0  # keep all events (default)
+   APPLY_SEARCHEFF_OPT: 1  # keep if software trigger passes
+   APPLY_SEARCHEFF_OPT: 3  # keep if software trigger and SPEC-ID -> zSPEC(SN)
+   APPLY_SEARCHEFF_OPT: 5  # keep if software trigger and zHOST
+   APPLY_SEARCHEFF_OPT: 9  # keep if software trigger and zSPEC(SN or HOST)
 \end{Verbatim}
 %
 When ``{\tt APPLY\_SEARCHEFF\_OPT: 3}'' is set,
-then {\tt SIM\_SEARCHEFF\_MASK=3} for all SNe
+then {\tt SIM\_SEARCHEFF\_MASK=11 (3+8)} for all saved SNe
 because those that fail either of the search 
-criteria are rejected. 
+criteria (software trigger of specID map) are rejected. 
 Setting  ``{\tt APPLY\_SEARCHEFF\_OPT: 1}'' results
-in SNe with {\tt SIM\_SEARCHEFF\_MASK=1} and 3;
+in SNe with {\tt SIM\_SEARCHEFF\_MASK=1} or 11;
 i.e., SNe with and without \spec\ confirmation.
 
 
@@ -3524,7 +3523,16 @@ Next, we given an example of a map with more complex function
 of {\tt HOSTLIB} properties:
 %
 \begin{Verbatim}[frame=single]
-OPT_EXTRAP: 1               # default is 0=>abort; 1=>use value at grid edge
+
+# decide how to handle extrapolations for all maps:
+# default is 0=>abort; 1=>use value at grid edge
+OPT_EXTRAP: 1               
+
+# decide if every event has FIELD corresponding to a map;
+# Detault = 1 -> every event requires map covering FIELD
+# option 0 -> if FIELD is not in a map, set EFF_zHOST=0
+OPT_FIELDMATCH_REQUIRE:  1  
+
 PEAKMJD_RANGE: 55600 58900  # default is 10000 90000
 FIELDLIST:  C3+X3           # default is ALL
 VARNAMES: g_obs i_obs  HOSTEFF
@@ -8663,50 +8671,50 @@ Photo-$z$ priors are described in \S\ref{subsec:photoz},
 and a brief description of the other {\tt \&FITINP}
 namelist prior options are given below.
 %
-\begin{itemize}
-  \item {\tt\bf PRIOR\_MJDSIG}: 
+\begin{itemize}  % .xyz
+  \item \verb|PRIOR_MJDSIG|:
     sigma on Gaussian prior for MJD at peak brightness.
     Default is 20 days.
 %
-  \item {\tt\bf PRIOR\_SHAPE\_RANGE(2)}: 
-    range of flat prior for shape parameter to prevent
-    crazy values.
-    Typical prior-range values are \{$-0.5,2.0$\} for the \mlcs\ 
-    parameter $\Delta$, and \{$-5,+3$\} for \SALTII\ parameter $x_1$. 
-    Default range is \{$-9,+9$\}.
-    The parameter below defines a smooth roll-off at the edges.
+  \item \verb|PRIOR_SHAPE_RANGE(2)|  and \verb|PRIOR_SHAPE_SIGMA|: 
+    range of flat prior for shape parameter to prevent crazy values,
+    and Gauss roll-off. Default range is \{$-9,+9$\} and $\sigma=0.1$.
 %
-  \item {\tt\bf PRIOR\_SHAPE\_SIGMA}: 
-    sigma of Gaussian roll-off at edge of flat prior defined above.
-    Default is 0.1.
+  \item \verb|PRIOR_COLOR_RANGE(2)|  and \verb|PRIOR_COLOR_SIGMA|: 
+    range of flat prior for color parameter to prevent crazy values,
+    and Gauss roll-off. Default range is \{$-9,+9$\} and $\sigma=0.01$.
 %
-  \item {\tt\bf PRIOR\_DELTA\_PROFILE(4)}:
+  \item \verb|PRIOR_DMU_RANGE(2)|  and \verb|PRIOR_DMU_SIGMA|: 
+    range of flat prior for $\mu-\mu_{\rm theory}$, mainly for photo-$z$ fits,
+    and Gauss roll-off. Default range is \{$-9,+9$\} and $\sigma=0.1$.
+%
+  \item \verb|PRIOR_DELTA_PROFILE(4)|:
     Used only for \mlcs\ $\Delta$,  
     the first two elements are $-\sigma$ and $+\sigma$
     for the asymmetric Gaussian prior, the 3rd element is
     the $\Delta$ value at the Gaussian peak,
     and the 4th element is the minimum 'flat'  probability
-    for all $\Delta$ values within {\tt PRIOR\_SHAPE\_RANGE}.
+    for all $\Delta$ values within \verb|PRIOR_SHAPE_RANGE|.
     A flat $\Delta$ prior is obtained by simply setting the 
     4th element to 1.0. Setting the 4th element to $\sim 0.1$
     results in a Gaussian prior with a flat tail for large 
     $\Delta$ values; this tail prevents the suppression of
     very fast decliners (91bg-like).
 %
-  \item {\tt\bf OPT\_PRIOR}: Default is 1 $\to$ use priors.
+  \item \verb|OPT_PRIOR|: Default is 1 $\to$ use priors.
     Setting to zero turns off ALL priors regardless of their values.
 %
-  \item {\tt\bf OPT\_PRIOR\_AV}: 
+  \item \verb|OPT_PRIOR_AV|: 
     Used only for \mlcs\ model, default is 1 $\to$ use $A_V$ priors.
     Setting to zero turns off $A_V$-related priors.
 %
- \item {\tt\bf PRIOR\_AVEXP(2)}:
+ \item \verb|PRIOR_AVEXP(2)|:
    For \mlcs\ only, defines up to two exponential slopes for $A_V$ prior.
 %
- \item {\tt\bf PRIOR\_AVWGT(2)}:
+ \item \verb|PRIOR_AVWGT(2)|:
    For \mlcs\ only, defines weight for the two $A_V$-exponential terms.
 %
- \item {\tt\bf PRIOR\_AVRES}:
+ \item \verb|PRIOR_AVRES|:
    Since the $A_V$ prior has a sharp boundary at $A_V=0$ and therefore
    a discontinuity in the fitting function, this {\tt PRIOR\_AVRES}
    option allows a Gaussian smearing of the prior function that results
@@ -10576,8 +10584,8 @@ Quantiles can be overwritten if they already exist in the
 original data files, 
 or appended if the original data files
 do not include quantile information. For quantile overrides using
-{\tt HOSTGAL\_ZPHOT\_Qppp} (where {\tt ppp=000, 010, ... 100}), 
-make sure to also include an {\tt NZPHOT\_Q} column with each value set to 11.
+\verb|HOSTGAL_ZPHOT_Qppp| (where {\tt ppp=000, 010, ... 100}), 
+make sure to also include an \verb|NZPHOT_Q| column with each value set to 11.
 
 
 A common  mistake is to accidentally replace data variable names with names in the
@@ -10585,8 +10593,28 @@ output FITRES tables: unfortunately the variable naming is not consistent.
 Such substituion usually results in an abort since no
 valid override variables are found.
 
+
+\clearpage % .xyz
+\subsubsection{Over-Riding Header Information: {\tt HEADER\_OVERRIDE\_DIR} }
+\label{sss:header_override_dir}
+%
+If using \verb|HEADER_OVERRIDE_FILE| with long comma-separated lists becomes
+difficult to manage, an alternative approach is to specify an override
+{\it directory} with a list file indicating which override files to use.
+For example,
+\begin{verbatim}
+   &SNLCINP
+      HEADER_OVERRIDE_DIR = '/project/mysurvey/OVERRIDES/V02'
+    !   beware that /project/mysurvey/overrides/V02/V02.LIST   must exist
+\end{verbatim}
+reads a list of overrides files from the LIST file, and internally
+constructs a comma-separated list of override files. This strategy
+is similar to reading data by specifying a data folder with
+\verb|VERSION_PHOTOMETRY| rather than specifying a list of files.
+
+
 % - - - - - - - - 
-\clearpage
+%\clearpage
 \subsubsection{Over-Riding by {\tt HOSTGAL\_OBJID} instead of {\tt CID}}
 \label{sss:header_override_galid}
 
@@ -11807,7 +11835,7 @@ use the more general {\tt GENPDF\_FILE} option
    PRIOR_MJDSIG   = xxx            ! Gaussian prior on MJD at peak
    PRIOR_SHAPE_RANGE = xxx, xxx  ! flat prior on x1 (prevents crazy values)
    PRIOR_SHAPE_SIGMA = xxx       ! Gauss rolloff at edges of flat prior
-
+   
    OPT_COVAR = 0  ! 0 => COV-diag only 
                   ! 1 => COV fixed during fit
                   ! 2 => COV re-calculated for each chi2 in fit
