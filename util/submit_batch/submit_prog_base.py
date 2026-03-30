@@ -1443,6 +1443,8 @@ class Program:
         # need to re-compute output_dir to find submit info file
         output_dir,script_subdir = self.set_output_dir_name()
         output_dir               = self.override_output_dir_name(output_dir)
+        if '/' not in output_dir :
+            output_dir = f"{CWD}/{output_dir}"
         self.config_prep['output_dir']  = output_dir
 
         # read SUBMIT.INFO passed from original submit job... 
@@ -2521,7 +2523,13 @@ class Program:
 
             # if script_dir is not output_dir, copy FAILURES.LOG to
             # output_dir so that it's easier to find
-            if script_dir != output_dir :
+            FAIL_SUMMARY_COPY_PATHFILE = os.path.join(
+                output_dir, FAIL_SUMMARY_FILE
+            )
+            if (
+                os.path.realpath(FAIL_SUMMARY_PATHFILE)
+                != os.path.realpath(FAIL_SUMMARY_COPY_PATHFILE)
+            ):
                 shutil.copy(FAIL_SUMMARY_PATHFILE,output_dir)
 
         # always update merge log file
@@ -2663,4 +2671,3 @@ class Program:
             return
 
 # ======= END OF FILE =========
-
