@@ -525,6 +525,14 @@ void simEnd(SIMFILE_AUX_DEF *SIMFILE_AUX) {
   printf("\t (%d lightcurves requested => %d were written) \n",
 	 INPUTS.NGEN, NGENLC_WRITE );
 
+  // Jul 31 2026 TZ: report LIBIDs skipped by the REPEAT_UNTIL_ACCEPT cap
+  if ( NLIBID_SKIP_REPEAT > 0 ) {
+    printf("\n  WARNING: %d SIMLIB LIBID(s) skipped after %d repeats "
+	   "with no accepted event.\n"
+	   "\t (grep 'skip to next LIBID' in log for LIBID list)\n\n",
+	   NLIBID_SKIP_REPEAT, 2*SIMLIB_MXGEN_LIBID );
+  }
+
   // Aug 2023: write CPUTIME (proc all and per event)
 
   print_cputime(t_end_init, STRING_CPUTIME_PROC_ALL,  UNIT_TIME_MINUTE, 0);
@@ -22305,13 +22313,35 @@ int USE_SAME_SIMLIB_ID(int IFLAG) {
 
   if ( NEW_SAMEFLAG ) { return 1; }
 
-  // - - - - - - - - - - - - - - - - 
+  // - - - - - - - - - - - - - - - -
   // check option to re-use same LIBID until an event is accepted
   // (for ABC sims)
   OVP = (INPUTS.SIMLIB_MSKOPT & SIMLIB_MSKOPT_REPEAT_UNTIL_ACCEPT );
-  if ( OVP > 0  &&  GENLC.FLAG_ACCEPT_LAST == 0 ) 
-    { return(1); }
-  // - - - - - - - - - - - - - - - - 
+  if ( OVP > 0  &&  GENLC.FLAG_ACCEPT_LAST == 0 ) {
+
+    if ( GENLC.NGEN_SIMLIB_ID < 2*SIMLIB_MXGEN_LIBID )  { return(1); }
+
+    // Jul 31 2026 TZ: cap the number of repeats per LIBID.
+    // A LIBID that is rejected before reaching the FLAG_ACCEPT_FORCE
+    // check in main (e.g., no epochs near PEAKMJD so NOBS_MODELFLUX=0,
+    // or no valid host for matched GROUPID) would otherwise repeat
+    // until the NGENTOT_LC budget is silently exhausted, truncating
+    // the generation pass with no warning. The cap here (2 x
+    // SIMLIB_MXGEN_LIBID) is intentionally above SIMLIB_MXGEN_LIBID
+    // so the pre-existing force-accept logic still handles LIBIDs
+    // that fail only SEARCHEFF or CUTWIN.
+    if ( IFLAG == 2 ) {
+      NLIBID_SKIP_REPEAT++ ;
+      printf("  WARNING(%s): LIBID=%d has no accepted event "
+	     "after %d attempts;\n"
+	     "\t skip to next LIBID (NLIBID_SKIP=%d).\n",
+	     fnam, GENLC.SIMLIB_ID, GENLC.NGEN_SIMLIB_ID,
+	     NLIBID_SKIP_REPEAT );
+      fflush(stdout);
+    }
+    return(0);
+  }
+  // - - - - - - - - - - - - - - - -
 
   // if we get here, read next LIBID
   return 0 ;
@@ -23745,11 +23775,16 @@ int GENRANGE_CUT(void) {
 
 
 
-  if ( INPUTS.HOSTLIB_USE && SNHOSTGAL.ZTRUE < 0.0 )  {  
+  if ( INPUTS.HOSTLIB_USE && SNHOSTGAL.ZTRUE < 0.0 )  {
     // if number of missing host-gals exceeds NGEN, then abort
     // to avoid infinite loop
+    // Jul 31 2026 TZ: with SIMLIB GROUPID matching, a group with no
+    // member inside the dztol window is a valid (non-pathological)
+    // rejection, so allow a much larger reject ratio before abort.
     NGEN_REJECT.HOSTLIB++ ;
-    int BIGRATIO = ( NGEN_REJECT.HOSTLIB > 2*NGENLC_WRITE );
+    int RATIO_ABORT = 2 ;
+    if ( SIMLIB_HEADER.NGROUPID_HOSTLIB > 0 ) { RATIO_ABORT = 20 ; }
+    int BIGRATIO = ( NGEN_REJECT.HOSTLIB > RATIO_ABORT*NGENLC_WRITE );
     if ( BIGRATIO && NGENLC_WRITE > 10 ) {
       float x = (float)NGEN_REJECT.HOSTLIB / (float)NGENLC_WRITE ;
       sprintf(c1err,"%d events rejected because HOST cannot be found:",

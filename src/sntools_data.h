@@ -38,9 +38,16 @@ struct {
   int IVAR_NAME_IAUC, IVAR_NAME_TRANSIENT; 
 
   // define variables to monitor what variable(s) are actually over-written.
-  // If no vars are over-written, abort with error message 
+  // If no vars are over-written, abort with error message
   int  NEVT;     // number of events with unique CID or GALID
   int  NVAR_USE; // number of override variables used (Aug 2025)
+
+  // Jul 31 2026 TZ: track which override columns are actually consumed
+  // so that RD_OVERRIDE_POSTPROC can warn about columns that are
+  // silently ignored (e.g., misspelled varname such as PKMJD).
+  bool VAR_REQUESTED[IVARMAX_OVERRIDE];
+  bool WARNED_UNUSED_VAR;
+  int  NFILE_AUTOSTORE_OVERRIDE; // NFILE_AUTOSTORE after reading override files
 
   char CID_LAST[40]; // always store last CID
   char ID_LAST[40];  // last CID or GALID passed; used to count NUSE_OVERRIDE
@@ -111,6 +118,8 @@ void rd_override_logmass_grid(int igal);
 void rd_override_name(void);
 void rd_override_hostgal2z(int igal, HOSTGALz_DEF *HOSTGAL0z, HOSTGALz_DEF *HOSTGALz);
 void rd_override_check_mistake(char *varname_mistake, char *varname_correct);
+void rd_override_mark_requested(int IVAR);      // Jul 2026
+void rd_override_check_unused_var(void);        // Jul 2026
 
 void init_override_missing_event(int ifile, char *OVERRIDE_FILE);
 bool match_override_missing_event(char *VARNAME);

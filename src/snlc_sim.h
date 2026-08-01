@@ -1513,6 +1513,7 @@ struct NGEN_REJECT {
 double ZVALID_FILTER[2][MXFILTINDX] ;
 int    NSKIP_FILTER[MXFILTINDX]; // number of times obs-filter is skipped
 int    NGEN_ALLSKIP ;
+int    NLIBID_SKIP_REPEAT ; // NLIBID skipped by REPEAT_UNTIL_ACCEPT cap (Jul 2026)
 
   // define SIMLIB_DUMP struct vs. SIMLIB  entry
 int NREAD_SIMLIB ;

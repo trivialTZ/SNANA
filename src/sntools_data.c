@@ -13,6 +13,11 @@
   May 6 2026 RK - if override QUANTILE_ZPHOT are explicitly set to -9,
                   then corresponding HOSTGAL_PHOTO[_ERR] are also set to -9
 
+  Jul 31 2026 TZ - warn about HEADER_OVERRIDE columns that are never
+                  consumed (e.g., misspelled varname such as PKMJD
+                  instead of PEAKMJD was silently ignored);
+                  see rd_override_check_unused_var().
+
 ******************************************/
 
 #include  "sntools.h"
@@ -1427,11 +1432,15 @@ void RD_OVERRIDE_INIT(char *OVERRIDE_PATH, int REQUIRE_DOCANA) {
     errmsg(SEV_FATAL, 0, fnam, c1err, c2err);       
   }
 
-  // - - - - - - - - - - - - 
+  // - - - - - - - - - - - -
   RD_OVERRIDE.USE    = true ;
   RD_OVERRIDE.NFILE  = NFILE;
-  for(ivar=0; ivar < IVARMAX_OVERRIDE ; ivar++ )
-    { RD_OVERRIDE.NTOT_PER_VAR[ivar] = 0 ; }
+  for(ivar=0; ivar < IVARMAX_OVERRIDE ; ivar++ ) {
+    RD_OVERRIDE.NTOT_PER_VAR[ivar]  = 0 ;
+    RD_OVERRIDE.VAR_REQUESTED[ivar] = false ; // Jul 31 2026 TZ
+  }
+  RD_OVERRIDE.WARNED_UNUSED_VAR      = false ;           // Jul 31 2026 TZ
+  RD_OVERRIDE.NFILE_AUTOSTORE_OVERRIDE = NFILE_AUTOSTORE ; // idem
 
   // - - - - - - - 
   // set z logicals in case zHEL <-> zCMB needs to be recomputed
@@ -1503,10 +1512,31 @@ void RD_OVERRIDE_INIT(char *OVERRIDE_PATH, int REQUIRE_DOCANA) {
   if ( EXIST_VARNAME_AUTOSTORE("NAME_IAUC") ) 
     { RD_OVERRIDE.IVAR_NAME_IAUC = IVAR_VARNAME_AUTOSTORE("NAME_IAUC", &ICAST ); }
 
-  if ( EXIST_VARNAME_AUTOSTORE("NAME_TRANSIENT") ) 
+  if ( EXIST_VARNAME_AUTOSTORE("NAME_TRANSIENT") )
     { RD_OVERRIDE.IVAR_NAME_TRANSIENT = IVAR_VARNAME_AUTOSTORE("NAME_TRANSIENT", &ICAST ); }
 
-  
+  // Jul 31 2026 TZ: mark override columns that are consumed at the
+  // POST-PROCESS stage (i.e., not via RD_OVERRIDE_FETCH) so that
+  // rd_override_check_unused_var does not flag them as unused.
+  {
+    int q;
+    rd_override_mark_requested(RD_OVERRIDE.IVAR_zCMB);
+    rd_override_mark_requested(RD_OVERRIDE.IVAR_zHEL);
+    for(igal=0; igal < MXHOSTGAL; igal++ ) {
+      rd_override_mark_requested(RD_OVERRIDE.IVAR_HOSTGAL_ZPHOT[igal]);
+      rd_override_mark_requested(RD_OVERRIDE.IVAR_HOSTGAL_ZPHOT_ERR[igal]);
+      rd_override_mark_requested(RD_OVERRIDE.IVAR_HOSTGALz_QUANTILE_ZPHOT[igal]);
+      rd_override_mark_requested(RD_OVERRIDE.IVAR_HOSTGALz_LOGMASS[igal]);
+    }
+    rd_override_mark_requested(RD_OVERRIDE.IVAR_NAME_IAUC);
+    rd_override_mark_requested(RD_OVERRIDE.IVAR_NAME_TRANSIENT);
+
+    for(q=0; q < RD_OVERRIDE.NQZPHOT_IMPLICIT; q++ ) {
+      IVAR = IVAR_VARNAME_AUTOSTORE(RD_OVERRIDE.VARLIST_QZPHOT_IMPLICIT[q], &ICAST);
+      rd_override_mark_requested(IVAR);
+    }
+  }
+
   // check for varname mistakes
   rd_override_check_mistake("HOSTGAL_ZPHOT" ,    "HOSTGAL_PHOTOZ");  // 2nd one is correct; allow 1st one
   rd_override_check_mistake("HOSTGAL_ZPHOTERR" , "HOSTGAL_PHOTOZ_ERR");
@@ -1801,6 +1831,64 @@ void get_override_file_list(char *OVERRIDE_PATH, char *OVERRIDE_FILE_LIST) {
 
 
 // ==================================================
+void rd_override_mark_requested(int IVAR) {
+
+  // Created Jul 31 2026 by TZ
+  // Mark override column IVAR as consumed (requested by a reader or
+  // registered for POST-PROCESS); see rd_override_check_unused_var.
+
+  if ( IVAR >= 0 && IVAR < IVARMAX_OVERRIDE )
+    { RD_OVERRIDE.VAR_REQUESTED[IVAR] = true ; }
+  return;
+
+} // end rd_override_mark_requested
+
+
+// ==================================================
+void rd_override_check_unused_var(void) {
+
+  // Created Jul 31 2026 by TZ
+  // One-time check (after first event is fully processed) for override
+  // columns that were never consumed; e.g., a misspelled varname such
+  // as PKMJD instead of PEAKMJD is silently ignored and the user has
+  // no way to distinguish "override applied" from "override dropped".
+  // Print loud WARNING for each unused column.
+
+  int ifile, ivar, ivar_tot=0, NWARN=0 ;
+  char *varName ;
+  char fnam[] = "rd_override_check_unused_var" ; (void)fnam;
+
+  // ------------ BEGIN ----------
+
+  if ( !RD_OVERRIDE.USE )              { return; }
+  if ( RD_OVERRIDE.WARNED_UNUSED_VAR ) { return; }
+  RD_OVERRIDE.WARNED_UNUSED_VAR = true ;
+
+  for(ifile=0; ifile < RD_OVERRIDE.NFILE_AUTOSTORE_OVERRIDE; ifile++ ) {
+    for(ivar=0; ivar < SNTABLE_AUTOSTORE[ifile].NVAR; ivar++ ) {
+      varName = SNTABLE_AUTOSTORE[ifile].VARNAME[ivar] ;
+      if ( ivar_tot < IVARMAX_OVERRIDE &&
+	   !RD_OVERRIDE.VAR_REQUESTED[ivar_tot]  &&
+	   strcmp(varName,RD_OVERRIDE.VARNAME_MATCH) != 0 ) {
+	printf("  WARNING(%s):\n"
+	       "\t HEADER_OVERRIDE column '%s' is never applied "
+	       "--> IGNORED.\n"
+	       "\t Check spelling against varnames in data header.\n",
+	       fnam, varName );
+	NWARN++ ;
+      }
+      ivar_tot++ ;
+    }
+  }
+
+  if ( NWARN > 0 ) { fflush(stdout); }
+
+  return;
+
+} // end rd_override_check_unused_var
+
+
+// ==================================================
 void rd_override_check_mistake(char *varname_mistake, char *varname_correct) {
 
   char fnam[] = "rd_override_check_mistake"; (void)fnam;
@@ -1859,8 +1947,11 @@ int RD_OVERRIDE_FETCH(char *CID, long long int GALID, char *VARNAME, double *DVA
     sprintf(c1err,"IVAR(%s) = %d exceeds bound of IVARMAX_OVERRIDE = %d",
 	    VARNAME, IVAR, IVARMAX_OVERRIDE);
     sprintf(c2err,"May need to increase IVARMAX_OVERRIDE");
-    errmsg(SEV_FATAL, 0, fnam, c1err, c2err);     
+    errmsg(SEV_FATAL, 0, fnam, c1err, c2err);
   }
+
+  // Jul 31 2026 TZ: mark this override column as consumed
+  if ( FOUND_VARNAME ) { rd_override_mark_requested(IVAR); }
 
   // check for NEW_ID. Always require NEW_CID, even if matching by GALID.
   // For latter, different GALIDs from multiple hosts may be called for
@@ -1986,7 +2077,11 @@ void RD_OVERRIDE_POSTPROC(void) {
   // check NAME_IAUC or NAME_TRANSIENT column when
   // these variables don't exist in original file.
   rd_override_name();
-  
+
+  // Jul 31 2026 TZ: after first event is fully processed, warn about
+  // override columns that were never consumed (e.g., misspelled varname).
+  rd_override_check_unused_var();
+
   return ;
 
 } // end RD_OVERRIDE_POSTPROC

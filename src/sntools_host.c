@@ -93,6 +93,13 @@
  Apr 13 2023: implement GROUPID match between SIMLIB and HOSTLIB
               (enable Large-scale structure)
 
+ Jul 31 2026: TZ - fix GROUPID host selection in GEN_SNHOST_GALID to
+              complete the weighted-random argmin scan instead of
+              stopping on the first GROUPID match (which always picked
+              the lowest-z group member, independent of RANSEED).
+              Also reject event (instead of abort) when a matched group
+              has no member inside the dztol window.
+
 =========================================================== */
 
 #include <stdio.h>
@@ -6350,26 +6357,31 @@ void GEN_SNHOST_GALID(double ZGEN) {
   igal_start = igal0; // restrict igal search range based on binary search above
   if ( !USEONCE ) { igal_end = igal1; } // idem
 
-  // - - - - - - - - - - - 
+  // - - - - - - - - - - -
   // Brute force search, one igal at a time.
   double  WGTDIF, WGTDIF_MIN = 1.0E20;
   bool   SKIP_WGT, MATCH_GROUPID ;
+  int    IGAL_BEST_GROUPID = -9 ;
 
   for ( igal = igal_start; igal <= igal_end; igal++ ) {
     NGAL_CHECK++ ;
     WGT     = ptrWGT[igal];
-    
+
     SKIP_WGT = false ;
     if ( NGROUPID > 0 ) {
       // find WGT closest to WGT_select that has GROUPID match.
       // Beware that this can be very slow for LARGE HOSTLIB because
       // it does not benefit from binary search above.
+      // Jul 31 2026 TZ: examine every GROUPID match and store argmin
+      //  in IGAL_BEST_GROUPID; selection happens after the loop.
+      //  Previously the loop stopped on the first GROUPID match, so the
+      //  random WGT_select was ignored and the lowest-z group member
+      //  was always selected (identically for every RANSEED).
       WGTDIF        = fabs(WGT-WGT_select);
       MATCH_GROUPID = MATCH_GROUPID_HOSTLIB(igal);
-      if ( WGTDIF < WGTDIF_MIN && MATCH_GROUPID ) 
-	{ WGTDIF_MIN = WGTDIF;  }
-      else	                 
-	{ SKIP_WGT = true; }
+      if ( MATCH_GROUPID && WGTDIF < WGTDIF_MIN )
+	{ WGTDIF_MIN = WGTDIF ;  IGAL_BEST_GROUPID = igal ; }
+      SKIP_WGT = true ;
     }
     else {
       // LEGACY; find first WGT above WGT_select.
@@ -6381,14 +6393,26 @@ void GEN_SNHOST_GALID(double ZGEN) {
 
 
     USEHOST = USEHOST_GALID(igal);
-    if ( !USEHOST  ) 
+    if ( !USEHOST  )
       { NSKIP_USED++ ; continue ; }
-    
+
     // select IGAL closest to WGT_select
     IGAL_SELECT = igal ;
     goto DONE_SELECT_GALID ;
-    
+
   } // end igal loop
+
+  // Jul 31 2026 TZ: for GROUPID mode, select the best-match group member
+  // found in the loop above. USEHOST_GALID is checked only for the
+  // selected galaxy because it marks the host as used (side effect),
+  // so it must not be called on every candidate.
+  if ( NGROUPID > 0 && IGAL_BEST_GROUPID >= 0 ) {
+    USEHOST = USEHOST_GALID(IGAL_BEST_GROUPID);
+    if ( USEHOST )
+      { IGAL_SELECT = IGAL_BEST_GROUPID ; }
+    else
+      { NSKIP_USED++ ; }
+  }
 
 
   // - - - - - - - - - - - - - - - - - - - - - - - - 
@@ -6406,7 +6430,14 @@ void GEN_SNHOST_GALID(double ZGEN) {
     
     // if using same Galaxy with MJD-sep, just return so that
     // this event is rejected.
-    if ( INPUTS.HOSTLIB_MINDAYSEP_SAMEGAL < 99999 ) 
+    if ( INPUTS.HOSTLIB_MINDAYSEP_SAMEGAL < 99999 )
+      { SNHOSTGAL.IGAL = IGAL_SELECT ; return ; }
+
+    // Jul 31 2026 TZ: for GROUPID mode, a group with no member inside
+    // the dztol window is a valid outcome (not a code error), so
+    // reject this event instead of aborting. Runaway rejection is
+    // still caught by the HOSTLIB-reject monitor in GENRANGE_CUT.
+    if ( NGROUPID > 0 )
       { SNHOSTGAL.IGAL = IGAL_SELECT ; return ; }
 
     print_preAbort_banner(fnam);
