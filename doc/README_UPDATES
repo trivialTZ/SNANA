@@ -23962,6 +23962,10 @@ TASK081_ZPHOT_SDSS_MLCS+HOST_5PAR       :  mis-match (REF != TEST)
      + broken-alpha (Aug 5 2026, TZ Tang): new fit params alpha1 (p24), dalpha1_dz (p25),
        x1_cen (p26) for two-slope stretch standardization split at x1 pivot;
        biasCor interpolation uses branch-selected per-event alpha.
+     + broken-alpha smoothing (Aug 5 2026, TZ Tang): new fit param x1_tau (p27);
+       if x1_tau > 0 the hard step is replaced by a sigmoid blend so that
+       chi2 is differentiable in x1_cen and the pivot can float (u26=1).
+       Default x1_tau = 0 keeps the hard step.
 
     snlc_fit.F90
      + fix dumb bug storing only 80 chars of FITMODEL_NAME from command line override,

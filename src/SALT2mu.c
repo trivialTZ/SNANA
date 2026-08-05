@@ -336,6 +336,13 @@ For help, run code with no arguments
    + fix fitparName typo dalpah_dlogm -> dalpha_dlogm
    + input alias alpha1= now maps to p24 (was p3, which is now dalpha_dz);
      new aliases dalpha_dz= and dbeta_dz= for p3/p4.
+   + optional sigmoid smoothing of the alpha break: new param x1_tau (p27),
+     alpha = alpha1_z + (alpha0_z - alpha1_z)*S((x1-x1_cen)/x1_tau).
+     Default x1_tau=0 keeps the hard step; x1_tau > 0 makes chi2
+     differentiable in x1_cen so the pivot can float (u26=1), with the
+     existing fitflag_sigmb=2 log(sigma) term handling the alpha-dependent
+     errors. Floating x1_cen with x1_tau=0 now aborts. New aliases
+     x1_cen= and x1_tau= for p26/p27.
 
  ******************************************************/
 
@@ -1397,7 +1404,7 @@ char FITPARNAMES_DEFAULT[MXCOSPAR][20] = {
   "H11mucc0    ", "H11mucc1    ", "H11mucc2    ",
   "H11sigcc0   ", "H11sigcc1   ", "H11sigcc2   ",
   "blank24     ", "alpha1      ", "dalpha1_dz  ", "x1_cen      ",
-  "blank28     ", "blank29     ", "blank30     "
+  "x1_tau      ", "blank29     ", "blank30     "
 } ;
 
 
@@ -1408,7 +1415,7 @@ int IPAR_LOGMASS_CEN, IPAR_LOGMASS_TAU ;
 int IPAR_scalePCC, IPAR_H11, NPAR_H11_TOT, NPAR_H11_USER ;
 int IPAR_COVINT_PARAM ;  // sigint or SCALE_COVINT(biasCor)
 int IPAR_OL, IPAR_Ok, IPAR_w0, IPAR_wa;
-int IPAR_ALPHA1, IPAR_DALPHA1_DZ, IPAR_X1_CEN ;  // broken-alpha params, Aug 2026
+int IPAR_ALPHA1, IPAR_DALPHA1_DZ, IPAR_X1_CEN, IPAR_X1_TAU ;  // broken-alpha params, Aug 2026
 
 
 // define inputs to fit that are read or calculated
@@ -4953,6 +4960,7 @@ void  fcnFetch_AlphaBetaGamma(double *xval, double z, double logmass, double x1,
   // Aug 4 2026: replace hard-wired xval-indices with IPAR_XXX
   //
   // Aug 05 2026 TZ Tang: add broken-alpha branch selection (alpha1 for x1 < x1_cen)
+  // Aug 05 2026 TZ Tang: add optional sigmoid smoothing over width x1_tau (p27)
   //
   // Broken-alpha convention (Option A, "step model"):
   //   alpha(x1,z) = alpha0 + z*dalpha_dz   for x1 >= x1_cen
@@ -4961,6 +4969,16 @@ void  fcnFetch_AlphaBetaGamma(double *xval, double z, double logmass, double x1,
   // discontinuous at the pivot by (alpha0-alpha1)*x1_cen. This is intentional
   // and matches the published ZTF free-break fits; sims inject SIM_alpha per
   // event with this same step convention.
+  //
+  // If x1_tau (p27) > 0 the hard step is replaced by a smooth sigmoid blend,
+  //   alpha(x1,z) = alpha1_z + (alpha0_z - alpha1_z) * S( (x1-x1_cen)/x1_tau )
+  // with S(u) = 1/(1+exp(-u)), alpha0_z = alpha0 + z*dalpha_dz and
+  // alpha1_z = alpha1 + z*dalpha1_dz. S -> 1 for x1 >> x1_cen (alpha0 branch),
+  // S -> 0 for x1 << x1_cen (alpha1 branch), S = 1/2 at the pivot; x1_tau -> 0
+  // recovers the hard step. The smooth blend makes chi2 differentiable in
+  // x1_cen so the pivot can float (u26=1). Note: the muerr propagation uses
+  // the blended alpha but ignores the dalpha/dx1 gradient term near the pivot.
+  //
   // Host-logmass slope/split terms (aHost) apply identically to both branches.
   // When INPUTS.USE_ALPHA1 is false, the arithmetic below is identical to the
   // original single-alpha code.
@@ -4980,10 +4998,25 @@ void  fcnFetch_AlphaBetaGamma(double *xval, double z, double logmass, double x1,
   double a0_use = a0, da_dz_use = da_dz ;  // broken-alpha branch values, Aug 2026
   int    OPT_LOGMASS_SLOPE=0, OPT_LOGMASS_SPLIT=0 ;
 
-  // broken alpha: pick low-stretch branch for x1 < x1_cen (Aug 5 2026, TZ Tang)
-  if ( INPUTS.USE_ALPHA1 && x1 < xval[IPAR_X1_CEN] ) {
-    a0_use    = xval[IPAR_ALPHA1] ;      // second slope for low-stretch branch
-    da_dz_use = xval[IPAR_DALPHA1_DZ] ;
+  // broken alpha: pick low-stretch branch for x1 < x1_cen, or sigmoid-blend
+  // the two branches if x1_tau > 0 (Aug 5 2026, TZ Tang)
+  if ( INPUTS.USE_ALPHA1 ) {
+    double a1     = xval[IPAR_ALPHA1] ;      // second slope, low-stretch branch
+    double a1_dz  = xval[IPAR_DALPHA1_DZ] ;
+    double x1_tau = xval[IPAR_X1_TAU] ;
+    if ( x1_tau > 1.0E-9 ) {
+      double arg = ( x1 - xval[IPAR_X1_CEN] ) / x1_tau ;
+      double S ;
+      if      ( arg >  20.0 ) { S = 1.0 ; }  // avoid exp overflow far from pivot
+      else if ( arg < -20.0 ) { S = 0.0 ; }
+      else                    { S = 1.0 / ( 1.0 + exp(-arg) ) ; }
+      a0_use    = a1    + ( a0    - a1    ) * S ;
+      da_dz_use = a1_dz + ( da_dz - a1_dz ) * S ;
+    }
+    else if ( x1 < xval[IPAR_X1_CEN] ) {
+      a0_use    = a1 ;
+      da_dz_use = a1_dz ;
+    }
   }
 
   alpha_local = a0_use + z*da_dz_use ;
@@ -5916,7 +5949,7 @@ void set_defaults(void) {
   IPAR_scalePCC=13, IPAR_COVINT_PARAM=14 ;
   IPAR_OL=9; IPAR_Ok=10; IPAR_w0=11;  IPAR_wa=12;
   IPAR_H11=17; NPAR_H11_TOT=6; NPAR_H11_USER=0;
-  IPAR_ALPHA1=24; IPAR_DALPHA1_DZ=25; IPAR_X1_CEN=26; // broken alpha, Aug 2026
+  IPAR_ALPHA1=24; IPAR_DALPHA1_DZ=25; IPAR_X1_CEN=26; IPAR_X1_TAU=27; // broken alpha, Aug 2026
 
 
   for(ipar=0; ipar < MAXPAR; ipar++ ) {
@@ -5932,6 +5965,7 @@ void set_defaults(void) {
   INPUTS.parval[IPAR_H11+2]        = .1;
   INPUTS.parval[IPAR_H11+3]        = .1;
   INPUTS.parval[IPAR_X1_CEN]       = -0.25 ;  // default x1 pivot for broken alpha
+  INPUTS.parval[IPAR_X1_TAU]       =  0.0  ;  // default 0 = hard step (no smoothing)
 
 
   for(ipar=0; ipar < MAXPAR; ipar++ )  {  INPUTS.izpar[ipar] = -99;   }
@@ -19062,6 +19096,10 @@ int ppar(char* item) {
   // points at p24 (broken-alpha second slope); p3 is now dalpha_dz.
   if ( uniqueOverlap(item,"alpha1="))
     { sscanf(&item[7],"%lf",&INPUTS.parval[24]); return(1); }
+  if ( uniqueOverlap(item,"x1_cen="))
+    { sscanf(&item[7],"%lf",&INPUTS.parval[26]); return(1); }
+  if ( uniqueOverlap(item,"x1_tau="))
+    { sscanf(&item[7],"%lf",&INPUTS.parval[27]); return(1); }
   if ( uniqueOverlap(item,"dalpha_dz="))
     { sscanf(&item[10],"%lf",&INPUTS.parval[3]); return(1); }
   if ( uniqueOverlap(item,"dbeta_dz="))
@@ -21365,7 +21403,7 @@ void  prep_fitpar(void) {
   // Created July 2023
   // set parameter bounds for each fit par
   //
-  // Aug 05 2026 TZ Tang: add broken-alpha params p24-p26 and call
+  // Aug 05 2026 TZ Tang: add broken-alpha params p24-p27 and call
   //              prep_input_broken_alpha()
 
   char usage[10];
@@ -21425,6 +21463,7 @@ void  prep_fitpar(void) {
   set_fitPar( 24, val[24], 0.01, -0.50, 0.50, ipar[24] ); // alpha1 (x1 < x1_cen branch)
   set_fitPar( 25, val[25], 0.02, -0.50, 0.50, ipar[25] ); // dAlpha1/dz
   set_fitPar( 26, val[26], 0.10, -3.00, 3.00, ipar[26] ); // x1_cen pivot
+  set_fitPar( 27, val[27], 0.05,  0.00, 9.00, ipar[27] ); // x1_tau sigmoid width
 
   prep_input_gamma();
   prep_input_broken_alpha();
@@ -21927,6 +21966,7 @@ void  prep_input_gamma(void) {
 void  prep_input_broken_alpha(void) {
 
   // Created Aug 5 2026 by TZ Tang
+  // Aug 05 2026 TZ Tang: add x1_tau (p27) sigmoid-smoothing checks
   // Prepare broken-alpha (two-slope, x1-pivot) params:
   // set USE_ALPHA1 if alpha1 (p24) is floated or fixed at non-zero value.
   // If alpha1 is used but its initial value is not set, default it to the
@@ -21965,15 +22005,53 @@ void  prep_input_broken_alpha(void) {
     }
   }
 
+  // Aug 05 2026 TZ Tang: sigmoid-smoothing (x1_tau, p27) sanity checks.
+  // A floating pivot with a hard step gives a chi2 that is piecewise
+  // constant in x1_cen, so MINUIT cannot move it; require x1_tau > 0.
+  if ( INPUTS.ipar[IPAR_X1_CEN] && INPUTS.parval[IPAR_X1_TAU] < 1.0E-9 ) {
+    sprintf(c1err,"Floating x1_cen (u26=1) requires sigmoid width x1_tau > 0");
+    sprintf(c2err,"Set p27 (e.g. p27=0.3), or fix the pivot with u26=0.");
+    errlog(FP_STDOUT, SEV_FATAL, fnam, c1err, c2err);
+  }
+
+  // if x1_tau is floated but starts at 0 (a bound, and the hard-step limit
+  // where the derivative vanishes), start it at 0.5 instead.
+  if ( INPUTS.ipar[IPAR_X1_TAU] && INPUTS.parval[IPAR_X1_TAU] < 0.01 ) {
+    INPUTS.parval[IPAR_X1_TAU] = 0.5 ;
+    if ( LDMP ) {
+      fprintf(FP_STDOUT, "\t %s: floated x1_tau initial value defaults "
+	      "to %.2f \n", fnam, INPUTS.parval[IPAR_X1_TAU] );
+    }
+  }
+
+  // a floated x1_tau must also stay away from the tau -> 0 staircase limit:
+  // if MINUIT drives tau to 0, chi2 becomes piecewise constant in x1_cen
+  // and the pivot freezes with a meaningless error. Raise the lower bound.
+  if ( INPUTS.ipar[IPAR_X1_TAU] && INPUTS.parbndmin[IPAR_X1_TAU] < 0.05 ) {
+    INPUTS.parbndmin[IPAR_X1_TAU] = 0.05 ;
+    if ( LDMP ) {
+      fprintf(FP_STDOUT, "\t %s: floated x1_tau lower bound raised "
+	      "to %.2f \n", fnam, INPUTS.parbndmin[IPAR_X1_TAU] );
+    }
+  }
+
   if ( LDMP ) {
     fprintf(FP_STDOUT, "\n %s: set USE_ALPHA1 flag (broken alpha enabled) \n",
 	    fnam );
     fprintf(FP_STDOUT, "\t x1_cen(pivot) initial value = %.4f \n",
 	    INPUTS.parval[IPAR_X1_CEN] );
-    fprintf(FP_STDOUT, "\t step model: alpha = alpha0 + z*dalpha_dz "
-	    "for x1 >= x1_cen, \n");
-    fprintf(FP_STDOUT, "\t             alpha = alpha1 + z*dalpha1_dz "
-	    "for x1 <  x1_cen. \n");
+    if ( INPUTS.parval[IPAR_X1_TAU] > 1.0E-9 ) {
+      fprintf(FP_STDOUT, "\t sigmoid model: alpha = alpha1_z + "
+	      "(alpha0_z - alpha1_z) * S((x1-x1_cen)/x1_tau) \n");
+      fprintf(FP_STDOUT, "\t x1_tau(width) initial value = %.4f \n",
+	      INPUTS.parval[IPAR_X1_TAU] );
+    }
+    else {
+      fprintf(FP_STDOUT, "\t step model: alpha = alpha0 + z*dalpha_dz "
+	      "for x1 >= x1_cen, \n");
+      fprintf(FP_STDOUT, "\t             alpha = alpha1 + z*dalpha1_dz "
+	      "for x1 <  x1_cen. \n");
+    }
     fflush(FP_STDOUT);
   }
 
