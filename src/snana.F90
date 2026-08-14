@@ -4573,7 +4573,12 @@
 
     CALL FETCH_SNDATA_WRAPPER("SIM_TYPE_NAME",   &  ! e.g., Ia, Ibc
           ONE, STRING, DARRAY, OPT)
-    SIMNAME_TYPE = STRING(1:12)
+    SIMNAME_TYPE = STRING(1:20) 
+    if ( INDEX(SIMNAME_TYPE,'SALT')   > 0   .or. &
+         INDEX(SIMNAME_TYPE,'BAYESN') > 0   .or. &
+         INDEX(SIMNAME_TYPE,'SNOOPY') > 0  ) then   
+       SIMNAME_TYPE = 'Ia'    ! Aug 12 2026
+    endif
 
     CALL FETCH_SNDATA_WRAPPER("SIM_MODEL_INDEX",  & 
           ONE, STRING, DARRAY, OPT)
@@ -9876,11 +9881,11 @@
 
 ! Created Jan 2015
 ! Apply &SNLCINP SIM_PRESCALE (if >1) to randomly pre-scale
-! the simulation. Use reproducible random numbers based
-! on input integer N (incremental index) ,
-!   RAN = mod(N,PI)/PI
+! the simulation. Use reproducible algorithm.
+! Return TRUE to reject event.
 ! 
 ! Apr 26 2017: pass PRESCALE as argument.
+! Aug 11 2026: replace algorithm; see FIXBUG
 
 
     USE SNPAR
@@ -9889,7 +9894,7 @@
 
     INTEGER N           ! (I) use for pseudo-random pre-scale
     REAL*8  PRESCALE    ! (I) prescale
-
+    LOGICAL FIXBUG
     DOUBLE PRECISION XN, RAN, RANMAX
 
 ! ------------- BEGIN --------------
@@ -9897,11 +9902,23 @@
     REJECT_PRESCALE = .FALSE.
 
     IF ( PRESCALE < 1.000001 ) RETURN
+    XN     = DBLE(N)    
+    FIXBUG = .TRUE.
 
-    XN     = DBLE(N)
-    RAN    = mod(XN,PI)/PI
-    RANMAX = 1.0/PRESCALE
-    IF ( RAN > RANMAX ) REJECT_PRESCALE = .TRUE.
+    IF ( FIXBUG ) THEN
+       if ( mod(XN,PRESCALE) .NE. 0 ) REJECT_PRESCALE = .TRUE.
+    ELSE
+       ! old buggy algorithm that fails for very large prescale
+       RAN    = mod(XN,PI)/PI
+       RANMAX = 1.0/PRESCALE
+       IF ( RAN > RANMAX ) REJECT_PRESCALE = .TRUE.
+    ENDIF
+
+!    print*,'ROW:  ', N, N, RAN
+!    write(6,66) N, RAN, RANMAX
+!66  format(T2,'xxx N=', I7, '  RAN, RANNAX = ', 2F12.5)
+!    call flush(6)
+
 
     RETURN
   END FUNCTION  REJECT_PRESCALE
@@ -21791,6 +21808,7 @@
     IF ( .NOT. LSIM_SNANA ) RETURN
     LL = INDEX(SIMNAME_TYPE,' ') - 1
     NAME = SIMNAME_TYPE(1:LL) // char(0)  ! Ia, Ib, IIN, etc ...
+    
     RETURN
   END SUBROUTINE GET_SIMNAME_TYPE
 

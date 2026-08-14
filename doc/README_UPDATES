@@ -24066,5 +24066,18 @@ TASK081_ZPHOT_SDSS_MLCS+HOST_5PAR       :  mis-match (REF != TEST)
     submit_prob_bbc:
       - fix merge process to work when there is no INPDIR+ key
 
+    snana.F90
+      - fix bad algorithm to apply SIM_PRESCALE. Old algorithm failed
+        for large pre-scale values.
+      - if SIMNAME_TYPE has SALT or BAYESN in the name, change SIMNAME_TYPE='Ia';
+        needed for psnid compatibility
+
+    psnid_BEST.c:
+      - expand PEC1A strings to include Iax and 91bg
+
+    snlc_sim.h:
+      GENLC.SNTEMPLATE[80] -> [MXPATHLEN] allocation to avoid crash when
+      NON1A.LIST points to file using full path that is longer than 80 chars.
+
 END:
  
