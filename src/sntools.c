@@ -9011,6 +9011,15 @@ int init_SNDATA_GLOBAL(void) {
 
   printf("\n  %s: \n", fnam); fflush(stdout);
 
+  // Aug 17 2026: copy WRFLAG_xxx from init_SNDATA_EVENT to here
+  SNDATA.WRFLAG_BLINDTEST     = false ; 
+  SNDATA.WRFLAG_PHOTPROB      = false ;
+  SNDATA.WRFLAG_ATMOS         = false ;
+  SNDATA.WRFLAG_SPECTRA       = true  ;
+  SNDATA.WRFLAG_DETINFO       = false ;
+
+  
+  // - - - -
   FORMAT_SNDATA_READ  = 0; 
   FORMAT_SNDATA_WRITE = 0;
 
@@ -9104,10 +9113,14 @@ int init_SNDATA_EVENT(void) {
   SNDATA.DEC_AVG = NULLFLOAT ;
   SNDATA.FAKE    = NULLINT ;
   SNDATA.MWEBV   = NULLFLOAT ;
+
+  /* xxx mark delete Aug 17 2026 : move to global
   SNDATA.WRFLAG_BLINDTEST     = false ; 
   SNDATA.WRFLAG_PHOTPROB      = false ;
   SNDATA.WRFLAG_ATMOS         = false ;
   SNDATA.WRFLAG_SPECTRA       = true  ;
+  SNDATA.WRFLAG_DETINFO       = false ;
+  xxxxxxx end mark */
 
   SNDATA.SNTYPE = 0 ;
 
@@ -9273,8 +9286,11 @@ int init_SNDATA_EVENT(void) {
   // epoch info
 
   SNDATA.HAS_TEXPOSE = false;
-  SNDATA.HAS_DETNUM  = false;
+  /* xxxxxx mark del Aug 2026 xxxxx
   SNDATA.HAS_IMGNUM  = false;
+  SNDATA.HAS_DETNUM  = false;
+  SNDATA.HAS_XYPIX   = false;
+  xxxxxxxxx */
 
   // avoid wasting time with loop over huge MXEPOCH; use NEP_LOCAL
   int MXEP_LOCAL = NEP_LAST;

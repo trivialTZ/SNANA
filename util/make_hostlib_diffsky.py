@@ -24,6 +24,8 @@
 #      + organize config inits in parse_config_driver()
 #      + if adding magerrs, auto-append obs_err_min, obs_err_min2, obs_err_min3
 #
+# Aug 15 2026 RK - add CONE_REGIONS key, but only 1 cone allowed until there
+#                  is a cone-merge utility
 # ===================================================================
 
 import os, argparse, logging, shutil, datetime, time, glob, random
@@ -35,6 +37,8 @@ import numpy as np
 from pathlib import Path
 
 from astropy.cosmology import LambdaCDM
+
+from astropy.table import Table, vstack
 
 # =======
 
@@ -172,7 +176,11 @@ CUTWIN:
 - redshift_true    0  1.8
 - lsst_r           0   28
 
+CONE_REGIONS:
+- <ra>  <dec>  <radius>  # degrees
+[maybe later can add more independent cone regions]
     """
+    
     print(f"{help_menu}\n")
     
     sys.exit()    
@@ -656,7 +664,6 @@ def inject_override_columns(df_cat, config):
         for var in override_varlist_diffsky:
             df_cat[var] = df_cat[var].fillna(NULL_VAL)
 
-    # .xyz
     logging.info(f"  inject_override_columns: merged for {n_before - n_missing:,}/{n_before:,} galaxies")
 
     return df_cat
@@ -680,8 +687,9 @@ def add_col_pd(df_cat, config):
     # RK - Jul 14 2026 - define wrapper to add mag errors
     t0     = time.time()    
     df_cat = add_col_magerr(df_cat, config)
+    
     print_proc_time(t0, "ADDCOL_MAGERR", None)
-
+    
     return df_cat  # end add_col_pd
 
 def add_col_magerr(df_cat, config):
@@ -711,8 +719,14 @@ def add_col_magerr_min(df_cat, config):
     band_list     = config['band_magerr_list_diffsky']
     band_err_list = [ b + '_err' for b in band_list ]
 
+    logging.info(f"Add {ADDCOL_PD_ERRMIN} among bands ... ")
+
+    sorted_vals = np.sort(df_cat[band_err_list].values, axis=1)
     for rank, addcol in enumerate(ADDCOL_PD_ERRMIN):
-        df_cat[addcol] = df_cat[band_err_list].apply(lambda row: sorted(row)[rank], axis=1)
+        df_cat[addcol] = sorted_vals[:, rank]
+    
+    #for rank, addcol in enumerate(ADDCOL_PD_ERRMIN):
+    #    df_cat[addcol] = df_cat[band_err_list].apply(lambda row: sorted(row)[rank], axis=1)
 
     return df_cat
 
@@ -753,7 +767,9 @@ def add_col_magerr_snr(df_cat,config):
         tmp_denom = (tmp_p0/snr0)**2 - (tmp_p1/snr1)**2
         tmp_ratio = tmp_numer/tmp_denom
         n_tot = len(tmp_ratio)
-        n_neg = sum(1 for x in tmp_ratio if x < 0)
+
+        # xxx mark n_neg = sum(1 for x in tmp_ratio if x < 0)
+        n_neg = int((tmp_ratio < 0).sum())
 
         if n_neg > 0:
             sys.exit(f"\n ERROR: {n_neg} of {n_tot} {band} galaxies have neg arg for log in ZP calc.")
@@ -806,7 +822,7 @@ def add_col_magerr_m5sig(df_cat,config):
         if m5sig_std > 0 :
             m5sig_noisy = rng.normal(loc=m5sig, scale=m5sig_std, size=len_df)
         else:
-            m5sig_noisy = np.full(len_df, m5sig)
+            m5sig_noisy = m5sig   # xxx mark np.full(len_df, m5sig)
             
         #m5sig_noisy = np.random.normal(m5sig, m5_err)
 
@@ -963,7 +979,6 @@ def check_diffsky_columns(config, ds):
     # if OVERRIDE_FILE is configured,  columns are not in HDF5 — skip them
     if KEY_OVERRIDE_FILE in config:
         exception_list    += config['override_varlist_diffsky']
-        # xxx mark exception_list    += config['m5sig_bands']
 
     nerr = 0
     for varname in list(hostlib_varname_dict):
@@ -986,9 +1001,12 @@ def apply_cuts(cat_inp, config):
     t0 = time.time()
     cat_out = cat_inp
 
-    n_row_inp = len(cat_inp)
-    CUTWIN  =  config.setdefault(KEY_CUTWIN,None)
-    if CUTWIN is None: return cat_out
+    n_row_inp    = len(cat_inp)
+    CUTWIN       = config.setdefault(KEY_CUTWIN,[])
+    CONE_REGIONS = config.setdefault('CONE_REGIONS',[])
+    APPLY_CUTS   = len(CUTWIN)>0  or len(CONE_REGIONS)>0
+    
+    if not  APPLY_CUTS: return cat_out
 
     logging.info(f"")
     logging.info(f"Apply cuts:")
@@ -999,8 +1017,30 @@ def apply_cuts(cat_inp, config):
         logging.info(f"   Apply cut {cutmin} < {cutvar} < {cutmax} ")
         cat_out = cat_out.filter(oc.col(cutvar)<cutmax).filter(oc.col(cutvar)>cutmin)
         n_row_out = len(cat_out)
-        logging.info(f"\t n_row after {cutvar} cut: {n_row_out} ")
+        logging.info(f"\t n_row after {cutvar} cut: {n_row_out:,} ")
+
+    # Aug 2026: check for cone regions (e.g., Roman)
+    n_cone = len(CONE_REGIONS)
+    if n_cone > 0:
+        if n_cone > 1:
+            sys.exit(f"\n ERROR: cannot merge {n_cone} cones; only 1 allowed.")
         
+        for row in CONE_REGIONS:
+            ra_cen       = float(row.split()[0])
+            dec_cen      = float(row.split()[1])
+            radius_cone  = float(row.split()[2])
+            label        = f"cone_ra{ra_cen}_dec{dec_cen}"
+            logging.info(f"Select cone region around RA={ra_cen:7.2f}  DEC={dec_cen:7.2f} " \
+                         f"  RADIUS={radius_cone} deg")
+            cone     = oc.make_cone( (ra_cen,dec_cen), radius_cone)  # default unit is degrees
+            cat_cone = cat_out.bound(cone)
+            n        = len(cat_cone)
+            logging.info(f"\t n_galaxies in cone : {n:,} ")
+            if n == 0 : continue
+    
+        cat_out = cat_cone
+
+    # - - - - - - - 
     n_row_out = len(cat_out)
     logging.info('')
     logging.info(f" Cuts reduce {n_row_inp:,} rows to {n_row_out:,} rows")
@@ -1126,7 +1166,20 @@ def get_snana_version():
                       shell=True, capture_output=True, text=True )
     snana_version = ret.stdout.replace('\n','')
     return snana_version
+
+def downcast_df(df_cat, config):
+    """Aug 2026 
+    Downcast numeric columns to smallest safe dtype (Cluade) ... except for RA and DEC (RK)
+    """
+    for col in df_cat.select_dtypes(include='float64').columns:
+        is_coord = 'RA' in col or 'DEC' in col
+        if not is_coord:
+            df_cat[col] = pd.to_numeric(df_cat[col], downcast='float')   # float64 → float32
             
+    for col in df_cat.select_dtypes(include='int64').columns:
+        df_cat[col] = pd.to_numeric(df_cat[col], downcast='integer')  # int64 → int32/int16
+    return df_cat
+
 def convert_galaxy_cat_to_pandas(galaxy_cat, config):
 
     logging.info(f"Convert galaxy catalog to pandas: ")
@@ -1137,22 +1190,14 @@ def convert_galaxy_cat_to_pandas(galaxy_cat, config):
     exclude_var_list = []
     # exclude columns computed at pandas level — not present in HDF5 catalog
     exclude_var_list += ADDCOL_PD_NAMES
-    # xxx mark cat_var_list = [v for v in cat_var_list if v not in ADDCOL_PD_NAMES]
 
     # Always exclude mag error columns — not in HDF5, computed in add_col_pd
     exclude_var_list += [b + '_err' for b in config['band_magerr_list_diffsky'] ]
-    
-    # xxxxxxxxxx mark delete xxxxxxxxxx
-    #magerr_bands =  config['magerr_bands']
-    #mag_err_cols = [b + '_err' for b in magerr_bands ]
-    #cat_var_list = [v for v in cat_var_list if v not in mag_err_cols]
-    # xxxxxxxxx end mark xxxxxx
     
     
     if KEY_OVERRIDE_FILE in config:
         # Also exclude raw mag band columns — not in HDF5, will be injected from parquet
         exclude_var_list += config['override_varlist_diffsky']
-        # xxx mark cat_var_list = [v for v in cat_var_list if v not in magerr_bands]
         
         # Add gal_id temporarily — needed as join key in inject_override_columns
         # (gal_id is unique across real + synthetic cores; core_tag=-1 for all synthetic)
@@ -1299,7 +1344,7 @@ def write_hostlib_files(args, config, df_cat):
     FOUND_GALID  = config['FOUND_GALID']
     n_hostlib    = config['n_hostlib']
     var_list  = list(hostlib_format_dict.keys() )
-    row_list  = df_cat[var_list].values.tolist()
+    # xxx mem hog  row_list  = df_cat[var_list].values.tolist()
     nrow_tot  = len(df_cat)
 
     logging.info("")
@@ -1329,6 +1374,121 @@ def write_hostlib_files(args, config, df_cat):
         dec_min = hlib_dict['dec_range'][0]
         dec_max = hlib_dict['dec_range'][1]                
 
+
+        row_mask[hlib_file] = \
+            (df_cat[VARNAME_RA]>=ra_min)   & (df_cat[VARNAME_RA]<=ra_max) & \
+            (df_cat[VARNAME_DEC]>=dec_min) & (df_cat[VARNAME_DEC]<=dec_max)
+
+        # xxxx Claude says this row_mask algorithm takes less memory, but it causes crash later
+        #ra  = df_cat[VARNAME_RA].values
+        #dec = df_cat[VARNAME_DEC].values
+        #row_mask[hlib_file] = (ra >= ra_min) & (ra <= ra_max) & (dec >= dec_min) & (dec <= dec_max)
+        # xxxxxxxx
+        
+        ngal                        = int(row_mask[hlib_file].sum())
+        ngal_expect_dict[hlib_file] = ngal
+        ngal_write_dict[hlib_file]  = 0
+        hlib_file_maxevt = max(ngal_expect_dict, key=ngal_expect_dict.get) # hostlib with max rows
+        write_hostlib_header(fp, hlib_file, ngal, config)
+    # - - - -
+
+    
+    logging.info(f"  Start writing GAL rows to HOSTLIB(s) ... ")
+    nrow = -1
+    nrow_wr = 0
+
+    CHUNK = n_update_stdout   # read in small-ish chunks to reduce memory (Claude's suggestion)
+    for start in range(0, len(df_cat), CHUNK):
+        chunk = df_cat.iloc[start:start + CHUNK]
+        for hlib_file, hlib_dict in hostlib_dict.items():
+            mask  = row_mask[hlib_file].iloc[start:start + CHUNK]
+            sub   = chunk[mask]
+            if sub.empty:   continue
+
+            lines = []
+            for item_list in sub[var_list].values.tolist():
+                nrow += 1
+                # convert comma-sep list into HOSTLIB-formatted row
+                row_hostlib = get_hostlib_row_format(item_list,config)
+        
+                if not FOUND_GALID:
+                    GALID = 1000000 + nrow
+                    row_hostlib  = f"{GALID}  {row_hostlib}"
+                    
+                lines.append(f"GAL:  {row_hostlib} \n")
+            # - - - -
+            hlib_dict['fp'].writelines(lines)
+            ntmp_wr = len(lines)
+            ngal_write_dict[hlib_file] += ntmp_wr
+
+            # update to stdout for HOSTLIB with max number of rows
+            if hlib_file == hlib_file_maxevt:
+                nrow_wr  = ngal_write_dict[hlib_file] 
+                logging.info(f"\t Finished writing {nrow_wr:12,} rows to {hlib_file}")
+
+    # - - - -  -
+    # use unix sed utility to update DOCANA values now that we have ngal per hostlib
+
+    logging.info('' )
+    logging.info('Summary' )
+        
+    for hlib_file, hlib_dict in hostlib_dict.items():
+        hlib_dict['fp'].close()
+        ngal      = ngal_write_dict[hlib_file]        
+        # print ngal to stdout
+        logging.info(f"  {hlib_file:40}   ngal = {ngal:10,}  ")
+        ngal_write_list.append(ngal)
+        
+        
+    # - - - -
+    nmax_gal = max(ngal_write_list)
+    print_proc_time(t0, "WRITE_HOSTLIB", nmax_gal )
+        
+    return  # end write_hostlib_files
+
+
+def write_hostlib_files_mem_hog(args, config, df_cat):
+    
+    t0 = time.time()
+    
+    hostlib_format_dict = config['hostlib_format_dict']
+    hostlib_dict = config['hostlib_dict']
+    FOUND_GALID  = config['FOUND_GALID']
+    n_hostlib    = config['n_hostlib']
+    var_list  = list(hostlib_format_dict.keys() )
+    row_list  = df_cat[var_list].values.tolist()
+    nrow_tot  = len(df_cat)
+
+    # @@@@@@@@@@@ OBSOLETE @@@@@@@@@@
+    logging.info("")
+    logging.info(f"Prepare writing {n_hostlib} HOSTLIB files ")
+
+    nrow_cat = len(df_cat)
+    n_update_stdout = get_n_update_stdout(nrow_cat)
+    
+    # check for random subsets
+    ngal_write_dict  = {}
+    ngal_expect_dict = {}    
+    ngal_write_list = []
+    row_mask        = {}
+
+    # @@@@@@@@@@@ OBSOLETE @@@@@@@@@@
+        
+    for hlib_file, hlib_dict in hostlib_dict.items():
+
+        logging.info(f"\t prepare row mask and DOCANA header for {hlib_file} ...")
+
+        if '.gz' in hlib_file :
+            fp      = gzip.open(hlib_file,"wt")
+        else:
+            fp      = open(hlib_file,"wt")
+            
+        hlib_dict['fp'] = fp  # store for GAL keys below
+        ra_min  = hlib_dict['ra_range'][0]
+        ra_max  = hlib_dict['ra_range'][1]
+        dec_min = hlib_dict['dec_range'][0]
+        dec_max = hlib_dict['dec_range'][1]                
+
         row_mask[hlib_file] = \
             (df_cat[VARNAME_RA]>=ra_min)   & (df_cat[VARNAME_RA]<=ra_max) & \
             (df_cat[VARNAME_DEC]>=dec_min) & (df_cat[VARNAME_DEC]<=dec_max)
@@ -1340,6 +1500,7 @@ def write_hostlib_files(args, config, df_cat):
         write_hostlib_header(fp, hlib_file, ngal, config)
     # - - - -
 
+    # @@@@@@@@@@@ OBSOLETE @@@@@@@@@@
     
     logging.info(f"  Start writing GAL rows to HOSTLIB(s) ... ")
     nrow = -1
@@ -1367,6 +1528,7 @@ def write_hostlib_files(args, config, df_cat):
             if update:
                 logging.info(f"\t Finished writing {nrow_wr:12,} HOSTLIB rows")
 
+    # @@@@@@@@@@@ OBSOLETE @@@@@@@@@@                
     # use unix sed utility to update DOCANA values now that we have ngal per hostlib
 
     logging.info('' )
@@ -1382,8 +1544,10 @@ def write_hostlib_files(args, config, df_cat):
     # - - - -
     nmax_gal = max(ngal_write_list)
     print_proc_time(t0, "WRITE_HOSTLIB", nmax_gal )
-        
-    return  # end write_hostlib_files
+
+    # @@@@@@@@@@@ OBSOLETE @@@@@@@@@@
+    
+    return  # end write_hostlib_files_mem_hog
 
 
 
@@ -1421,7 +1585,9 @@ if __name__ == "__main__":
     logging.info('')
 
     df_cat = convert_galaxy_cat_to_pandas(galaxy_cat, config)
-
+    del galaxy_cat
+    #df_cat = downcast_df(df_cat, config)  # 64 bit -> 32 bit | NO; messes up RA & DEC
+    
     if KEY_OVERRIDE_FILE in config:
         # Inject pre-computed mags from parquet; join on core_tag ↔ serial_tag (both int64)
         df_cat = inject_override_columns(df_cat, config)
